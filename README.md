@@ -91,31 +91,6 @@ The **Voice Shopping Assistant** allows users to build and manage personal shopp
 └── README.md
 ```
 
----
-
-## ⚙️ Environment Variables
-
-### Backend Configuration (`backend/.env`)
-```env
-PORT=8000
-SECRET_KEY=your_production_jwt_secret_key
-FRONTEND_URL=https://your-frontend.vercel.app
-GROQ_API_KEY=gsk_your_groq_api_key_here
-GROQ_MODEL=openai/gpt-oss-20b
-DATABASE_URL=sqlite:///./voice_shopping.db
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_KEY=your_supabase_anon_key
-QDRANT_URL=https://your-cluster.qdrant.tech
-QDRANT_API_KEY=your_qdrant_api_key
-QDRANT_COLLECTION_NAME=products
-```
-
-### Frontend Configuration (`frontend/.env`)
-```env
-VITE_API_BASE_URL=http://localhost:8000
-```
-
----
 
 ## 🚀 Local Development Setup
 
