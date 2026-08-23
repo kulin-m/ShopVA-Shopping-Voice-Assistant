@@ -4,16 +4,26 @@ import os
 # Add backend directory to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
 
-from datetime import datetime, timedelta
-from app.database.connection import SessionLocal, init_db
+from sqlalchemy.orm import Session
+from typing import Optional
+from app.database.connection import SessionLocal
 from app.database.models import User, Product, ProductSize, ShoppingList, ShoppingItem, PurchaseHistory
 from app.search.vector_service import vector_service
 
-def seed_database():
-    init_db()
-    db = SessionLocal()
+def seed_database(existing_db: Optional[Session] = None):
+    should_close_db = False
+    if existing_db is not None:
+        db = existing_db
+    else:
+        db = SessionLocal()
+        should_close_db = True
 
     try:
+        existing_products_count = db.query(Product).count()
+        if existing_products_count > 0:
+            print(f"[DATABASE] Catalogue already initialized: {existing_products_count} products exist; skipping seed.")
+            return
+
         print("Seeding expanded supermarket catalog products and sizes...")
 
         user = db.query(User).filter_by(id="default-user-id").first()
@@ -1280,7 +1290,8 @@ def seed_database():
         db.rollback()
         print(f"Error seeding database: {e}")
     finally:
-        db.close()
+        if should_close_db:
+            db.close()
 
 if __name__ == "__main__":
     seed_database()

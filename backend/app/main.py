@@ -68,4 +68,10 @@ def root():
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok"}
+    from app.database.connection import get_db_status
+    db_stat = get_db_status()
+    return {
+        "status": db_stat["status"],
+        "database": db_stat["database"]
+    }
+
