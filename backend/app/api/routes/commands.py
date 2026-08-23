@@ -35,3 +35,9 @@ def process_voice_command(
     logger.info(f"✅ [ACTION RESULT]: {response.message} (Reason: {reason})")
 
     return response
+
+@router.get("/diagnostics")
+def groq_diagnostics():
+    """Unauthenticated diagnostic endpoint verifying Groq LLM setup without exposing keys."""
+    return llm_service.test_groq_connection()
+

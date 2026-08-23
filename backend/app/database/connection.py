@@ -3,14 +3,18 @@ from sqlalchemy.orm import sessionmaker, Session
 from app.core.config import settings
 from app.database.models import Base, User
 import logging
+import os
 
 logger = logging.getLogger("uvicorn.error")
 
-engine = create_engine(
-    settings.DATABASE_URL,
-    connect_args={"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {}
-)
+def get_engine(db_url: str):
+    is_sqlite = "sqlite" in db_url
+    connect_args = {"check_same_thread": False} if is_sqlite else {}
+    return create_engine(db_url, connect_args=connect_args, pool_pre_ping=True)
 
+# Primary Engine setup
+primary_db_url = settings.DATABASE_URL
+engine = get_engine(primary_db_url)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def get_db():
@@ -46,20 +50,35 @@ def run_migrations(db_engine=None):
         logger.error(f"Error running database schema migration: {e}")
 
 def init_db():
-    """Initializes tables, applies schema migrations, and ensures default user exists."""
-    Base.metadata.create_all(bind=engine)
-    run_migrations()
-
-    db = SessionLocal()
+    """Initializes tables with fallback to SQLite if remote PostgreSQL is unreachable."""
+    global engine, SessionLocal
     try:
-        user = db.query(User).filter_by(id="default-user-id").first()
-        if not user:
-            user = User(id="default-user-id", name="Primary User")
-            db.add(user)
-            db.commit()
-            logger.info("Created default primary user in database.")
+        # Test connection
+        with engine.connect() as conn:
+            pass
+        logger.info(f"Connected successfully to primary database ({settings.DATABASE_URL.split('@')[-1] if '@' in settings.DATABASE_URL else 'local'}).")
     except Exception as e:
-        db.rollback()
-        logger.error(f"Error initializing DB user: {e}")
-    finally:
-        db.close()
+        logger.warning(f"Primary database connection failed ({e}). Falling back to local SQLite database.")
+        fallback_url = "sqlite:///./voice_shopping.db"
+        engine = get_engine(fallback_url)
+        SessionLocal.configure(bind=engine)
+
+    try:
+        Base.metadata.create_all(bind=engine)
+        run_migrations(engine)
+
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter_by(id="default-user-id").first()
+            if not user:
+                user = User(id="default-user-id", name="Primary User")
+                db.add(user)
+                db.commit()
+                logger.info("Created default primary user in database.")
+        except Exception as err:
+            db.rollback()
+            logger.error(f"Error initializing DB user: {err}")
+        finally:
+            db.close()
+    except Exception as e_init:
+        logger.error(f"Critical DB initialization error: {e_init}")

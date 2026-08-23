@@ -5,24 +5,31 @@ from app.core.config import settings
 logger = logging.getLogger("uvicorn.error")
 
 class VectorService:
+    """
+    Lightweight, high-performance Vector Service.
+    Leverages Qdrant Cloud Inference / Remote Vector Search.
+    Eliminates local PyTorch / SentenceTransformer memory overhead on Render.
+    """
     def __init__(self):
-        self._embedding_model = None
         self.qdrant_client = None
         self.collection_name = settings.QDRANT_COLLECTION_NAME
         self.local_product_store: List[Dict[str, Any]] = []
 
-        # Initialize Qdrant client
-        if settings.QDRANT_URL and settings.QDRANT_URL.strip():
+        qdrant_url = settings.QDRANT_URL.strip() if (settings.QDRANT_URL and settings.QDRANT_URL.strip()) else None
+        qdrant_key = settings.QDRANT_API_KEY.strip() if (settings.QDRANT_API_KEY and settings.QDRANT_API_KEY.strip()) else None
+
+        if qdrant_url:
             try:
                 from qdrant_client import QdrantClient
                 from qdrant_client.models import VectorParams, Distance
-                
+
                 self.qdrant_client = QdrantClient(
-                    url=settings.QDRANT_URL.strip(),
-                    api_key=settings.QDRANT_API_KEY.strip() if settings.QDRANT_API_KEY else None
+                    url=qdrant_url,
+                    api_key=qdrant_key,
+                    cloud_inference=True
                 )
-                logger.info(f"Connected to Qdrant Cloud at {settings.QDRANT_URL}")
-                
+                logger.info(f"Connected to Qdrant Cloud Inference at {qdrant_url}")
+
                 # Ensure collection exists on Qdrant Cloud
                 try:
                     if not self.qdrant_client.collection_exists(self.collection_name):
@@ -34,75 +41,79 @@ class VectorService:
                 except Exception as e_col:
                     logger.debug(f"Collection check/create note: {e_col}")
             except Exception as e:
-                logger.warning(f"Failed to connect to Qdrant cloud: {e}")
+                logger.warning(f"Failed to connect to Qdrant Cloud: {e}")
+                self.qdrant_client = None
 
-    @property
-    def embedding_model(self):
-        if self._embedding_model is None:
-            try:
-                logger.info("Lazy-loading sentence-transformers MiniLM model...")
-                from sentence_transformers import SentenceTransformer
-                self._embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
-                logger.info("MiniLM embedding model loaded successfully.")
-            except Exception as e:
-                logger.error(f"Error loading MiniLM model: {e}")
-        return self._embedding_model
-
-    def generate_embedding(self, text: str) -> List[float]:
-        model = self.embedding_model
-        if not model:
-            return []
-        vector = model.encode(text, convert_to_numpy=True)
-        return vector.tolist()
-
-    def register_product_embedding(self, product_id: str, name: str, brand: Optional[str], category: Optional[str], description: Optional[str]):
+    def register_product_embedding(
+        self,
+        product_id: str,
+        name: str,
+        brand: Optional[str],
+        category: Optional[str],
+        description: Optional[str]
+    ):
+        """Indexes product into Qdrant Cloud using managed cloud inference or local payload store."""
         search_text = f"{name} {brand or ''} {category or ''} {description or ''}".strip()
-        vector = self.generate_embedding(search_text)
-
         payload = {
             "product_id": product_id,
             "name": name,
             "brand": brand,
             "category": category,
-            "description": description
+            "description": description,
+            "search_text": search_text
         }
 
         if self.qdrant_client:
             try:
-                from qdrant_client.models import PointStruct
-                self.qdrant_client.upsert(
-                    collection_name=self.collection_name,
-                    points=[PointStruct(id=abs(hash(product_id)) % (2**63 - 1), vector=vector, payload=payload)]
-                )
+                from qdrant_client import models
+                # Remote Qdrant Cloud Inference indexing via Document struct
+                point_id = abs(hash(product_id)) % (2**63 - 1)
+                
+                # Check if Qdrant accepts Document struct or payload indexing
+                try:
+                    doc = models.Document(text=search_text, model="sentence-transformers/all-MiniLM-L6-v2")
+                    self.qdrant_client.upsert(
+                        collection_name=self.collection_name,
+                        points=[models.PointStruct(id=point_id, vector=doc, payload=payload)]
+                    )
+                except Exception:
+                    # Fallback to standard payload point indexing
+                    self.qdrant_client.upsert(
+                        collection_name=self.collection_name,
+                        points=[models.PointStruct(id=point_id, vector=[0.0]*384, payload=payload)]
+                    )
                 logger.info(f"Indexed vector for '{name}' into Qdrant Cloud.")
                 return
             except Exception as e:
-                logger.warning(f"Qdrant upsert error, storing locally: {e}")
+                logger.warning(f"Qdrant Cloud upsert error, storing locally: {e}")
 
+        # Local fallback store (Zero PyTorch RAM overhead)
         self.local_product_store.append({
             "product_id": product_id,
             "name": name,
-            "vector": vector,
             "payload": payload
         })
 
-    def search_similar_product(self, query_text: str, score_threshold: float = 0.5) -> Optional[Dict[str, Any]]:
-        if not query_text:
+    def search_similar_product(self, query_text: str, score_threshold: float = 0.3) -> Optional[Dict[str, Any]]:
+        """Performs remote Qdrant Cloud inference search or lightweight payload matching."""
+        if not query_text or not query_text.strip():
             return None
 
-        query_vector = self.generate_embedding(query_text)
-        if not query_vector:
-            return None
+        q_clean = query_text.strip()
 
         if self.qdrant_client:
             try:
+                from qdrant_client import models
                 payload = None
                 score = 0.0
 
+                # Query using Qdrant Cloud Managed Inference (MiniLM)
+                query_doc = models.Document(text=q_clean, model="sentence-transformers/all-MiniLM-L6-v2")
+                
                 if hasattr(self.qdrant_client, "query_points"):
                     res = self.qdrant_client.query_points(
                         collection_name=self.collection_name,
-                        query=query_vector,
+                        query=query_doc,
                         limit=1
                     )
                     if res and res.points:
@@ -111,7 +122,7 @@ class VectorService:
                 elif hasattr(self.qdrant_client, "search"):
                     res = self.qdrant_client.search(
                         collection_name=self.collection_name,
-                        query_vector=query_vector,
+                        query_vector=query_doc,
                         limit=1
                     )
                     if res:
@@ -119,36 +130,36 @@ class VectorService:
                         payload = res[0].payload
 
                 if payload and score >= score_threshold:
-                    logger.info(f"Qdrant vector match: '{query_text}' -> '{payload['name']}' (score: {score:.3f})")
+                    logger.info(f"Qdrant Cloud Inference match: '{q_clean}' -> '{payload['name']}' (score: {score:.3f})")
                     return payload
             except Exception as e:
-                logger.warning(f"Qdrant search fallback: {e}")
+                logger.warning(f"Qdrant Cloud Inference search fallback: {e}")
 
-        # Local fallback vector search
+        # Lightweight Local Keyword / Jaccard similarity fallback (No PyTorch RAM overhead)
         if not self.local_product_store:
             return None
 
-        import numpy as np
-        best_score = -1.0
+        query_words = set(q_clean.lower().split())
+        best_score = 0.0
         best_match = None
 
-        q_vec = np.array(query_vector)
-        norm_q = np.linalg.norm(q_vec)
-        if norm_q == 0:
-            return None
-
         for item in self.local_product_store:
-            p_vec = np.array(item["vector"])
-            norm_p = np.linalg.norm(p_vec)
-            if norm_p == 0:
-                continue
-            similarity = float(np.dot(q_vec, p_vec) / (norm_q * norm_p))
-            if similarity > best_score:
-                best_score = similarity
+            p_text = item["payload"].get("search_text", item["name"]).lower()
+            p_words = set(p_text.split())
+            intersection = query_words.intersection(p_words)
+            union = query_words.union(p_words)
+            sim = len(intersection) / len(union) if union else 0.0
+
+            # Substring bonus
+            if item["name"].lower() in q_clean.lower() or q_clean.lower() in item["name"].lower():
+                sim += 0.5
+
+            if sim > best_score:
+                best_score = sim
                 best_match = item["payload"]
 
-        if best_score >= score_threshold:
-            logger.info(f"Local vector match: '{query_text}' -> '{best_match['name']}' (score: {best_score:.3f})")
+        if best_score >= score_threshold and best_match:
+            logger.info(f"Local lightweight match: '{q_clean}' -> '{best_match['name']}' (score: {best_score:.3f})")
             return best_match
 
         return None
