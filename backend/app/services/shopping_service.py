@@ -189,7 +189,10 @@ class ShoppingService:
                             existing_item.is_size_unresolved = is_unresolved
                         existing_item.category = category_name
                         db.commit()
-                        msg = f"Updated {display_name} quantity to {existing_item.quantity} ({selected_size or 'default size'})."
+                        if selected_size and selected_size != "__________":
+                            msg = f"Updated {display_name} quantity to {existing_item.quantity} ({selected_size})."
+                        else:
+                            msg = f"Updated {display_name} quantity to {existing_item.quantity}."
                         messages.append(msg)
                     else:
                         new_item = ShoppingItem(
@@ -204,8 +207,12 @@ class ShoppingService:
                         )
                         db.add(new_item)
                         db.commit()
-                        size_str = f" ({selected_size})" if selected_size else ""
-                        msg = f"Added {quantity} {display_name}{size_str} to your shopping list."
+                        if selected_size and selected_size != "__________":
+                            msg = f"Added {quantity} {display_name} ({selected_size}) to your shopping list."
+                        elif is_unresolved:
+                            msg = f"Added {quantity} {display_name} to your shopping list. Please choose a size."
+                        else:
+                            msg = f"Added {quantity} {display_name} to your shopping list."
                         messages.append(msg)
 
                     item_results.append({

@@ -40,7 +40,6 @@ class SizeDecisionEngine:
         RULE 4: Multiple sizes + history preference NOT in brochure -> ask user for size choice.
         RULE 5: Multiple sizes + no clear preference -> mark unresolved and return brochure options.
         """
-        # If product not found in catalog, cannot evaluate sizes
         if not product:
             return SizeDecisionResult(
                 size="__________",
@@ -54,10 +53,9 @@ class SizeDecisionEngine:
         catalog_sizes: List[ProductSize] = product.sizes if product.sizes else []
         avail_size_values = [s.size_value for s in catalog_sizes]
 
-        # RULE 1: User explicitly provided a size (e.g. "Add 650ml shampoo")
+        # RULE 1: Explicit size specified by user
         if explicit_size and explicit_size.strip():
             norm_explicit = explicit_size.strip()
-            # Check brochure catalog availability (case-insensitive)
             matching_size = next((s for s in avail_size_values if s.lower() == norm_explicit.lower()), None)
             if matching_size:
                 return SizeDecisionResult(
@@ -69,7 +67,7 @@ class SizeDecisionEngine:
                 )
             else:
                 sizes_str = ", ".join(avail_size_values) if avail_size_values else "None"
-                msg = f"'{norm_explicit}' {product.name} is not listed in the supermarket catalog. Available sizes are {sizes_str}. Which size would you like?"
+                msg = f"'{norm_explicit}' {product.name} is not listed in the supermarket catalog. Available sizes are {sizes_str}. Please choose a size."
                 return SizeDecisionResult(
                     size="__________",
                     is_unresolved=True,
@@ -79,7 +77,7 @@ class SizeDecisionEngine:
                     clarification_message=msg
                 )
 
-        # RULE 2: Product has only 1 size in brochure
+        # RULE 2: Single catalog size variant
         if len(avail_size_values) == 1:
             single_size = avail_size_values[0]
             return SizeDecisionResult(
@@ -90,7 +88,6 @@ class SizeDecisionEngine:
                 requires_user_clarification=False
             )
 
-        # If no sizes listed in database catalog for this product
         if len(avail_size_values) == 0:
             return SizeDecisionResult(
                 size="__________",
@@ -130,7 +127,7 @@ class SizeDecisionEngine:
                 else:
                     # RULE 4: Preferred size from history is NO LONGER available in brochure
                     sizes_str = ", ".join(avail_size_values)
-                    msg = f"You usually buy {most_common_size} {product.name}, but {most_common_size} isn't available in this supermarket catalog. Available sizes are {sizes_str}. Which size would you like?"
+                    msg = f"You usually buy {most_common_size} {product.name}, but {most_common_size} isn't available in this supermarket catalog. Available sizes are {sizes_str}. Please choose a size."
                     return SizeDecisionResult(
                         size="__________",
                         is_unresolved=True,

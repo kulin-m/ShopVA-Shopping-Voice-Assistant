@@ -139,7 +139,7 @@ export const ShoppingList = ({ items, onItemUpdated, onCheckout }) => {
                     className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-100 border border-amber-300 text-amber-900 rounded-lg text-xs font-bold hover:bg-amber-200 transition-all shadow-sm"
                   >
                     <AlertTriangle className="w-3.5 h-3.5 text-amber-700" />
-                    <span>{item.size || '__________'}</span>
+                    <span>{item.size || 'Select size'}</span>
                     <ChevronDown className="w-3 h-3 text-amber-700" />
                   </button>
 

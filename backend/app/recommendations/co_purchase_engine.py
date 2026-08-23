@@ -82,7 +82,7 @@ class CoPurchaseRecommendationEngine:
                 catalog_product_name = product.name
                 # ── Brochure Catalog Size Resolution (Requirement 22) ────────────
                 size_res = size_decision_engine.evaluate_size_decision(db, user_id, product)
-                suggested_size = size_res.size if (not size_res.is_unresolved and size_res.size != "__________") else None
+                suggested_size = size_res.size if (not size_res.is_unresolved and size_res.size) else None
 
             # Pick strongest co-purchased trigger
             best_trigger_lower, count = max(trigger_dict.items(), key=lambda x: x[1])

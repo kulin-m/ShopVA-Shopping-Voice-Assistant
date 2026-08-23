@@ -146,6 +146,21 @@ export const VoiceToggle = ({ onCommandProcessed, voiceState, setVoiceState, las
       }
     };
 
+    const sanitizeTtsText = (text) => {
+      if (!text) return '';
+      let clean = String(text);
+      clean = clean.replace(/_+/g, '');
+      clean = clean.replace(/\[.*?\]/g, '');
+      clean = clean.replace(/\b(underscore|null|none|undefined)\b/gi, '');
+      return clean.replace(/\s+/g, ' ').trim();
+    };
+
+    const sanitizedMessage = sanitizeTtsText(message);
+    if (!sanitizedMessage) {
+      finishTts();
+      return;
+    }
+
     try {
       window.speechSynthesis.cancel();
       
@@ -156,7 +171,7 @@ export const VoiceToggle = ({ onCommandProcessed, voiceState, setVoiceState, las
         return;
       }
 
-      const utterance = new SpeechSynthesisUtterance(message);
+      const utterance = new SpeechSynthesisUtterance(sanitizedMessage);
       utterance.onend = () => {
         if (!ttsEnabledRef.current) {
           console.log('[TTS] onend ignored — assistant voice disabled');
