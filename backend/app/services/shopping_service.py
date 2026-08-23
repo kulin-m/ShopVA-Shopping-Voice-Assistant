@@ -1,12 +1,39 @@
+import re
+import logging
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
+from sqlalchemy import or_, func
+
 from app.database.models import ShoppingList, ShoppingItem, Product, ProductSize, PurchaseHistory
 from app.schemas.command import ParsedCommand, IntentEnum, CommandResponse
 from app.services.size_engine import size_decision_engine
 from app.search.vector_service import vector_service
-import logging
 
 logger = logging.getLogger("uvicorn.error")
+
+SIZE_REGEX = r'\b(\d+(?:\.\d+)?)\s*(ml|milliliter|milliliters|l|liter|liters|g|gram|grams|kg|kilogram|kilograms|oz|lbs|pound|pounds)\b'
+
+def normalize_product_query(query_text: str) -> str:
+    """
+    Normalizes user item string for catalog resolution:
+    - Strips explicit sizes (e.g. 500g, 1kg, 650ml)
+    - Strips standalone units and 'of' (e.g. packets of, bottles of)
+    - Strips command verbs (add, buy, get, need)
+    - Trims whitespace and converts to lowercase
+    """
+    if not query_text:
+        return ""
+    text = query_text.strip().lower()
+    text = re.sub(SIZE_REGEX, '', text, flags=re.IGNORECASE)
+    text = re.sub(r'^\s*(?:add|include|buy|i need|put|get|want|at|please)\b\s*', '', text, flags=re.IGNORECASE)
+
+    stop_words = ["of", "packet", "packets", "bottle", "bottles", "pack", "packs", "can", "cans", "bag", "bags", "piece", "pieces", "gram", "grams", "kg", "ml", "liter", "liters"]
+    for sw in stop_words:
+        text = re.sub(r'\b' + re.escape(sw) + r'\b', '', text, flags=re.IGNORECASE)
+
+    text = re.sub(r'\b\d+\b', '', text)
+    cleaned = re.sub(r'\s+', ' ', text).strip()
+    return cleaned if cleaned else query_text.strip().lower()
 
 class ShoppingService:
     def get_or_create_active_list(self, db: Session, user_id: str) -> ShoppingList:
@@ -21,6 +48,58 @@ class ShoppingService:
             db.commit()
             db.refresh(shopping_list)
         return shopping_list
+
+    def resolve_catalogue_product(self, db: Session, raw_query: str) -> Optional[Product]:
+        """
+        4-Step Robust Catalogue Resolution Pipeline:
+        Step 1: Exact DB normalized name match
+        Step 2: Database lexical / substring match
+        Step 3: Qdrant Cloud semantic search (Top 5 candidates)
+        Step 4: PostgreSQL candidate validation (PostgreSQL is authoritative source of truth)
+        """
+        cleaned = normalize_product_query(raw_query)
+        if not cleaned:
+            return None
+
+        # Step 1: Exact normalized name match
+        product = db.query(Product).filter(func.lower(Product.name) == cleaned).first()
+        if product:
+            logger.info(f"🔎 [CATALOGUE RESOLUTION] query='{raw_query}' (clean='{cleaned}') | database_exact_match='{product.name}' | resolved_product_id='{product.id}' | category='{product.category}'")
+            return product
+
+        # Step 2: Lexical DB Substring / ILIKE Match
+        candidates = db.query(Product).filter(
+            or_(
+                Product.name.ilike(f"%{cleaned}%"),
+                Product.category.ilike(f"%{cleaned}%"),
+                Product.brand.ilike(f"%{cleaned}%")
+            )
+        ).all()
+        if candidates:
+            best_lexical = min(candidates, key=lambda p: abs(len(p.name) - len(cleaned)))
+            logger.info(f"🔎 [CATALOGUE RESOLUTION] query='{raw_query}' (clean='{cleaned}') | database_lexical_match='{best_lexical.name}' | resolved_product_id='{best_lexical.id}' | category='{best_lexical.category}'")
+            return best_lexical
+
+        # Reverse Substring Match (e.g. query is "Amul Pasteurised Butter" -> matches "Butter")
+        all_products = db.query(Product).all()
+        for p in all_products:
+            if p.name.lower() in cleaned or cleaned in p.name.lower():
+                logger.info(f"🔎 [CATALOGUE RESOLUTION] query='{raw_query}' (clean='{cleaned}') | database_substring_match='{p.name}' | resolved_product_id='{p.id}' | category='{p.category}'")
+                return p
+
+        # Step 3 & 4: Qdrant Cloud Semantic Search + PostgreSQL Validation
+        vector_candidates = vector_service.search_similar_products(cleaned, limit=5, score_threshold=0.3)
+        for match in vector_candidates:
+            p_id = match.get("product_id")
+            if p_id:
+                product = db.query(Product).filter(Product.id == p_id).first()
+                if product:
+                    score = match.get("score", 0.0)
+                    logger.info(f"🔎 [CATALOGUE RESOLUTION] query='{raw_query}' (clean='{cleaned}') | qdrant_match='{product.name}' | qdrant_score={score:.3f} | resolved_product_id='{product.id}' | category='{product.category}'")
+                    return product
+
+        logger.warning(f"🔎 [CATALOGUE RESOLUTION] query='{raw_query}' (clean='{cleaned}') | NOT FOUND in catalogue.")
+        return None
 
     def process_command(self, db: Session, user_id: str, parsed: ParsedCommand) -> CommandResponse:
         active_list = self.get_or_create_active_list(db, user_id)
@@ -76,274 +155,257 @@ class ShoppingService:
             explicit_size = cmd_item.size
 
             try:
-                # ── 1. Brochure/Catalog Semantic & Database Product Resolution ─────
-                product = None
-                vector_match = vector_service.search_similar_product(raw_name)
-                if vector_match:
-                    product = db.query(Product).filter(Product.id == vector_match["product_id"]).first()
+                # ── 1. Brochure / Catalog Resolution Pipeline ──────────
+                product = self.resolve_catalogue_product(db, raw_name)
 
-                if not product:
-                    product = db.query(Product).filter(Product.name.ilike(f"%{raw_name}%")).first()
-
-                # ── CASE B: Product Does NOT Exist in Brochure Catalog ───────────────
-                if not product:
-                    not_found_msg = f"I couldn't find '{raw_name}' in this supermarket's catalog. Would you like to add it anyway?"
-                    messages.append(not_found_msg)
-                    
-                    # Add as unverified item to shopping list
-                    new_unverified = ShoppingItem(
-                        list_id=active_list.id,
-                        product_id=None,
-                        product_name=raw_name.capitalize(),
-                        category="Other",
-                        quantity=quantity,
-                        unit=cmd_item.unit,
-                        size="__________",
-                        is_size_unresolved=True,
-                        status="PENDING"
+                # ── CASE A: Product Exists in Brochure Catalog ──────────────
+                if product:
+                    size_result = size_decision_engine.evaluate_size_decision(
+                        db=db,
+                        user_id=user_id,
+                        product=product,
+                        explicit_size=explicit_size
                     )
-                    db.add(new_unverified)
-                    db.commit()
-                    db.refresh(new_unverified)
+                    selected_size = size_result.size if size_result else explicit_size
+                    is_unresolved = size_result.is_unresolved if size_result else False
+                    unresolved_reason = size_result.reason if size_result else None
+
+                    category_name = product.category or "General"
+                    display_name = product.name
+
+                    existing_item = (
+                        db.query(ShoppingItem)
+                        .filter(
+                            ShoppingItem.list_id == active_list.id,
+                            ShoppingItem.product_id == product.id
+                        )
+                        .first()
+                    )
+
+                    if existing_item:
+                        existing_item.quantity += quantity
+                        if selected_size:
+                            existing_item.size = selected_size
+                            existing_item.is_size_unresolved = is_unresolved
+                        existing_item.category = category_name
+                        db.commit()
+                        msg = f"Updated {display_name} quantity to {existing_item.quantity} ({selected_size or 'default size'})."
+                        messages.append(msg)
+                    else:
+                        new_item = ShoppingItem(
+                            list_id=active_list.id,
+                            product_id=product.id,
+                            product_name=display_name,
+                            category=category_name,
+                            quantity=quantity,
+                            unit=cmd_item.unit,
+                            size=selected_size,
+                            is_size_unresolved=is_unresolved
+                        )
+                        db.add(new_item)
+                        db.commit()
+                        size_str = f" ({selected_size})" if selected_size else ""
+                        msg = f"Added {quantity} {display_name}{size_str} to your shopping list."
+                        messages.append(msg)
 
                     item_results.append({
-                        "item": raw_name.capitalize(),
-                        "success": True,
+                        "item": raw_name,
+                        "product_found": True,
+                        "product_name": display_name,
+                        "category": category_name,
+                        "quantity": quantity,
+                        "size": selected_size,
+                        "is_size_unresolved": is_unresolved,
+                        "size_reason": unresolved_reason,
+                        "message": messages[-1]
+                    })
+                    any_success = True
+
+                # ── CASE B: Product NOT in Brochure Catalog (Unverified Item) ────────────
+                else:
+                    unverified_name = raw_name.strip().capitalize()
+                    not_found_msg = f"I couldn't find '{raw_name}' in this supermarket's catalog. Added '{unverified_name}' to your list anyway."
+
+                    existing_item = (
+                        db.query(ShoppingItem)
+                        .filter(
+                            ShoppingItem.list_id == active_list.id,
+                            ShoppingItem.product_name.ilike(unverified_name)
+                        )
+                        .first()
+                    )
+
+                    if existing_item:
+                        existing_item.quantity += quantity
+                        if explicit_size:
+                            existing_item.size = explicit_size
+                        db.commit()
+                        msg = f"Updated {unverified_name} quantity to {existing_item.quantity}."
+                        messages.append(msg)
+                    else:
+                        new_unverified = ShoppingItem(
+                            list_id=active_list.id,
+                            product_id=None,
+                            product_name=unverified_name,
+                            category="Other",
+                            quantity=quantity,
+                            unit=cmd_item.unit,
+                            size=explicit_size,
+                            is_size_unresolved=False
+                        )
+                        db.add(new_unverified)
+                        db.commit()
+                        messages.append(not_found_msg)
+
+                    item_results.append({
+                        "item": raw_name,
                         "product_found": False,
+                        "product_name": unverified_name,
                         "category": "Other",
                         "quantity": quantity,
-                        "unit": cmd_item.unit,
-                        "size": "__________",
-                        "is_size_unresolved": True,
-                        "item_id": new_unverified.id,
+                        "size": explicit_size,
                         "message": not_found_msg
-                    })
-                    any_success = True
-                    continue
-
-                # ── CASE A: Product Exists in Brochure Catalog ───────────────────────
-                product_name = product.name
-                product_id = product.id
-                product_category = product.category or "Other"
-
-                # ── 2. Size Decision Engine (5 Brochure Rules) ──────────────────────
-                size_result = size_decision_engine.evaluate_size_decision(
-                    db=db,
-                    user_id=user_id,
-                    product=product,
-                    explicit_size=explicit_size
-                )
-
-                # Check if item already in active list
-                existing_item = (
-                    db.query(ShoppingItem)
-                    .filter(ShoppingItem.list_id == active_list.id, ShoppingItem.product_name.ilike(product_name))
-                    .first()
-                )
-
-                if existing_item:
-                    existing_item.quantity += quantity
-                    if cmd_item.unit:
-                        existing_item.unit = cmd_item.unit
-                    if product_category:
-                        existing_item.category = product_category
-                    if not size_result.is_unresolved:
-                        existing_item.size = size_result.size
-                        existing_item.is_size_unresolved = False
-                    db.commit()
-                    db.refresh(existing_item)
-
-                    unit_disp = f" {existing_item.unit}" if existing_item.unit else ""
-                    if size_result.requires_user_clarification and size_result.clarification_message:
-                        msg_text = size_result.clarification_message
-                    else:
-                        msg_text = f"Updated {product_name} quantity to {existing_item.quantity}{unit_disp}."
-                    messages.append(msg_text)
-
-                    item_results.append({
-                        "item": product_name,
-                        "success": True,
-                        "product_found": True,
-                        "category": product_category,
-                        "quantity": existing_item.quantity,
-                        "unit": existing_item.unit,
-                        "size": existing_item.size,
-                        "is_size_unresolved": existing_item.is_size_unresolved,
-                        "available_sizes": size_result.available_sizes,
-                        "item_id": existing_item.id,
-                        "message": msg_text
-                    })
-                    any_success = True
-                else:
-                    new_item = ShoppingItem(
-                        list_id=active_list.id,
-                        product_id=product_id,
-                        product_name=product_name,
-                        category=product_category,
-                        quantity=quantity,
-                        unit=cmd_item.unit,
-                        size=size_result.size,
-                        is_size_unresolved=size_result.is_unresolved,
-                        status="PENDING"
-                    )
-                    db.add(new_item)
-                    db.commit()
-                    db.refresh(new_item)
-
-                    unit_disp = f" {cmd_item.unit}" if cmd_item.unit else ""
-                    size_disp = f" — {size_result.size}" if size_result.size and size_result.size != "__________" else ""
-
-                    if size_result.requires_user_clarification and size_result.clarification_message:
-                        msg_text = size_result.clarification_message
-                    elif "recent purchases" in size_result.reason:
-                        msg_text = f"Added {product_name}{size_disp} based on your recent purchases."
-                    else:
-                        msg_text = f"Added {quantity}{unit_disp} {product_name}{size_disp} to your list."
-
-                    messages.append(msg_text)
-
-                    item_results.append({
-                        "item": product_name,
-                        "success": True,
-                        "product_found": True,
-                        "category": product_category,
-                        "quantity": quantity,
-                        "unit": cmd_item.unit,
-                        "size": size_result.size,
-                        "is_size_unresolved": size_result.is_unresolved,
-                        "available_sizes": size_result.available_sizes,
-                        "item_id": new_item.id,
-                        "size_reason": size_result.reason,
-                        "message": msg_text
                     })
                     any_success = True
 
             except Exception as e:
+                db.rollback()
                 logger.error(f"Error processing item '{raw_name}': {e}")
-                messages.append(f"Could not process '{raw_name}'.")
-                item_results.append({
-                    "item": raw_name,
-                    "success": False,
-                    "error": str(e)
-                })
+                messages.append(f"Failed to add '{raw_name}'.")
 
-        overall_message = " ".join(messages)
-        first_id = item_results[0].get("item_id") if item_results else None
-        first_reason = item_results[0].get("size_reason") if item_results else None
-
+        final_msg = " ".join(messages)
         return CommandResponse(
             success=any_success,
-            message=overall_message,
+            message=final_msg,
             parsed=parsed,
             action_taken="ADD_ITEMS" if len(items_to_process) > 1 else "ADD_ITEM",
             data={
-                "items": item_results,
-                "item_id": first_id,
-                "size_reason": first_reason
+                "summary": final_msg,
+                "items": item_results
             }
         )
 
     def _handle_remove_item(self, db: Session, active_list: ShoppingList, parsed: ParsedCommand) -> CommandResponse:
-        raw_name = parsed.item or ""
-        # Resolve product against current shopping list
-        items = (
-            db.query(ShoppingItem)
-            .filter(ShoppingItem.list_id == active_list.id, ShoppingItem.product_name.ilike(f"%{raw_name}%"))
-            .all()
-        )
-        if not items:
+        raw_name = parsed.item
+        if not raw_name:
             return CommandResponse(
                 success=False,
-                message=f"Could not find '{raw_name}' in your shopping list.",
+                message="No item specified to remove.",
                 parsed=parsed,
                 action_taken="NONE"
             )
 
-        if len(items) > 1:
-            matching_names = ", ".join(i.product_name for i in items)
+        cleaned_name = normalize_product_query(raw_name)
+
+        item_to_remove = (
+            db.query(ShoppingItem)
+            .filter(
+                ShoppingItem.list_id == active_list.id,
+                or_(
+                    ShoppingItem.product_name.ilike(f"%{cleaned_name}%"),
+                    ShoppingItem.product_name.ilike(f"%{raw_name}%")
+                )
+            )
+            .first()
+        )
+
+        if item_to_remove:
+            removed_name = item_to_remove.product_name
+            db.delete(item_to_remove)
+            db.commit()
             return CommandResponse(
-                success=False,
-                message=f"Multiple items match '{raw_name}' ({matching_names}). Which one would you like to remove?",
+                success=True,
+                message=f"Removed {removed_name} from your shopping list.",
                 parsed=parsed,
-                action_taken="NONE",
-                data={"candidates": [i.product_name for i in items]}
+                action_taken="REMOVE_ITEM"
             )
 
-        item = items[0]
-        removed_name = item.product_name
-        db.delete(item)
-        db.commit()
         return CommandResponse(
-            success=True,
-            message=f"Removed {removed_name} from your list.",
+            success=False,
+            message=f"'{raw_name}' was not found on your shopping list.",
             parsed=parsed,
-            action_taken="REMOVE_ITEM"
+            action_taken="NONE"
         )
 
     def _handle_update_item(self, db: Session, user_id: str, active_list: ShoppingList, parsed: ParsedCommand) -> CommandResponse:
         raw_name = parsed.item
-        new_size = parsed.size
-        new_quantity = parsed.quantity
+        requested_size = parsed.size
+        requested_qty = parsed.quantity
+
+        if not active_list.items:
+            return CommandResponse(
+                success=False,
+                message="Your shopping list is empty.",
+                parsed=parsed,
+                action_taken="NONE"
+            )
 
         target_item = None
         if raw_name:
+            cleaned_name = normalize_product_query(raw_name)
             target_item = (
                 db.query(ShoppingItem)
-                .filter(ShoppingItem.list_id == active_list.id, ShoppingItem.product_name.ilike(f"%{raw_name}%"))
+                .filter(
+                    ShoppingItem.list_id == active_list.id,
+                    or_(
+                        ShoppingItem.product_name.ilike(f"%{cleaned_name}%"),
+                        ShoppingItem.product_name.ilike(f"%{raw_name}%")
+                    )
+                )
                 .first()
             )
-
+        
+        # If no specific item named or target item not found by name, check for unresolved items
         if not target_item:
             target_item = (
                 db.query(ShoppingItem)
                 .filter(ShoppingItem.list_id == active_list.id, ShoppingItem.is_size_unresolved == True)
                 .first()
             )
+        
+        if not target_item and len(active_list.items) > 0:
+            target_item = active_list.items[-1]
 
         if not target_item:
             return CommandResponse(
                 success=False,
-                message="No matching item found to update.",
+                message=f"Could not find '{raw_name or 'item'}' to update on your list.",
                 parsed=parsed,
                 action_taken="NONE"
             )
 
-        # ── Brochure Catalog Validation for Requested Size ──────────────────
-        if new_size:
+        # Check brochure size validity if updating size for a catalogue product
+        if requested_size:
             product = None
             if target_item.product_id:
                 product = db.query(Product).filter(Product.id == target_item.product_id).first()
             if not product:
-                product = db.query(Product).filter(Product.name.ilike(f"%{target_item.product_name}%")).first()
-
+                product = self.resolve_catalogue_product(db, target_item.product_name)
+            
             if product and product.sizes:
-                avail_sizes = [s.size_value for s in product.sizes]
-                matching_size = next((s for s in avail_sizes if s.lower() == new_size.strip().lower()), None)
-                if matching_size:
-                    target_item.size = matching_size
-                    target_item.is_size_unresolved = False
-                else:
-                    sizes_str = ", ".join(avail_sizes)
+                valid_sizes = [s.size_value.lower() for s in product.sizes]
+                if valid_sizes and requested_size.lower() not in valid_sizes:
                     return CommandResponse(
                         success=False,
-                        message=f"'{new_size}' is not listed in the supermarket catalog for {product.name}. Available sizes: {sizes_str}.",
+                        message=f"'{requested_size}' is not listed in the supermarket catalog for {product.name}.",
                         parsed=parsed,
-                        action_taken="NONE",
-                        data={"available_sizes": avail_sizes}
+                        action_taken="NONE"
                     )
-            else:
-                target_item.size = new_size
-                target_item.is_size_unresolved = False
 
-        if new_quantity and new_quantity > 0:
-            target_item.quantity = new_quantity
+        updated_fields = []
+        if requested_size:
+            target_item.size = requested_size
+            target_item.is_size_unresolved = False
+            updated_fields.append(f"to size {requested_size}")
+        if requested_qty:
+            target_item.quantity = requested_qty
+            updated_fields.append(f"quantity to {requested_qty}")
 
         db.commit()
-        db.refresh(target_item)
-
+        desc = " and ".join(updated_fields) if updated_fields else "item"
         return CommandResponse(
             success=True,
-            message=f"Updated {target_item.product_name} to size {target_item.size or ''}.",
+            message=f"Updated {target_item.product_name} {desc}.",
             parsed=parsed,
             action_taken="UPDATE_ITEM"
         )

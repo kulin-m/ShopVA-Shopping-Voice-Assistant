@@ -41,3 +41,30 @@ def groq_diagnostics():
     """Unauthenticated diagnostic endpoint verifying Groq LLM setup without exposing keys."""
     return llm_service.test_groq_connection()
 
+@router.get("/admin/diagnostics")
+def admin_catalogue_diagnostics(db: Session = Depends(get_db)):
+    """Safe diagnostic reporting PostgreSQL product count, Qdrant stats, and Groq status without exposing keys."""
+    from app.database.models import Product, ProductSize
+    from app.search.vector_service import vector_service
+
+    prod_count = db.query(Product).count()
+    size_count = db.query(ProductSize).count()
+    qdrant_diag = vector_service.get_vector_diagnostics()
+    groq_diag = llm_service.test_groq_connection()
+
+    return {
+        "postgresql": {
+            "product_count": prod_count,
+            "product_size_count": size_count
+        },
+        "qdrant": qdrant_diag,
+        "groq": groq_diag
+    }
+
+@router.post("/admin/reindex")
+def reindex_catalogue(db: Session = Depends(get_db)):
+    """Idempotently re-indexes PostgreSQL products into Qdrant Cloud Inference."""
+    from app.search.catalogue_indexer import catalogue_indexer
+    return catalogue_indexer.index_all_products(db)
+
+

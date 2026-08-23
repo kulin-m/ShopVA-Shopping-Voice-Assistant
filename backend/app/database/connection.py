@@ -1,7 +1,7 @@
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker, Session
 from app.core.config import settings
-from app.database.models import Base, User
+from app.database.models import Base, User, Product
 import logging
 import os
 
@@ -50,7 +50,7 @@ def run_migrations(db_engine=None):
         logger.error(f"Error running database schema migration: {e}")
 
 def init_db():
-    """Initializes tables with fallback to SQLite if remote PostgreSQL is unreachable."""
+    """Initializes tables with fallback to SQLite if remote PostgreSQL is unreachable and auto-seeds catalog."""
     global engine, SessionLocal
     try:
         # Test connection
@@ -75,9 +75,20 @@ def init_db():
                 db.add(user)
                 db.commit()
                 logger.info("Created default primary user in database.")
+
+            # Auto-seed catalogue if database products table is empty
+            product_count = db.query(Product).count()
+            if product_count == 0:
+                logger.info("Database catalogue is empty. Auto-seeding 114 supermarket products...")
+                try:
+                    from scripts.import_products import seed_database
+                    seed_database()
+                    logger.info("Auto-seeded supermarket catalogue successfully.")
+                except Exception as e_seed:
+                    logger.error(f"Error auto-seeding catalogue: {e_seed}")
         except Exception as err:
             db.rollback()
-            logger.error(f"Error initializing DB user: {err}")
+            logger.error(f"Error initializing DB user/catalogue: {err}")
         finally:
             db.close()
     except Exception as e_init:

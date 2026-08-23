@@ -183,7 +183,7 @@ def test_13_14_multi_item_and_partial_success(db):
     butter = next(i for i in items if i["item"] == "Butter")
     assert butter["product_found"] is True
 
-    dragon = next(i for i in items if i["item"] == "Dragon fruit")
+    dragon = next(i for i in items if i["item"].lower() == "dragon fruit")
     assert dragon["product_found"] is False
 
 # ═══════════════════════════════════════════════════════════════════════════════
