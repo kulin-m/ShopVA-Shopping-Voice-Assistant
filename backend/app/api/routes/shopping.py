@@ -38,7 +38,13 @@ def add_item_manual(
         product = db.query(Product).filter(Product.id == item_in.product_id).first()
 
     if not product:
-        product = db.query(Product).filter(Product.name.ilike(f"%{item_in.product_name}%")).first()
+        product = shopping_service.resolve_catalogue_product(db, item_in.product_name)
+
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"I couldn't find '{item_in.product_name}' in the supermarket catalogue."
+        )
 
     size = item_in.size
     is_unresolved = item_in.is_size_unresolved
@@ -48,12 +54,12 @@ def add_item_manual(
         size = size_res.size
         is_unresolved = size_res.is_unresolved
 
-    category = item_in.category or (product.category if product and product.category else "Other")
+    category = product.category or "General"
 
     item = ShoppingItem(
         list_id=active_list.id,
-        product_id=product.id if product else item_in.product_id,
-        product_name=product.name if product else item_in.product_name,
+        product_id=product.id,
+        product_name=product.name,
         category=category,
         quantity=item_in.quantity,
         unit=item_in.unit,

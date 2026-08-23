@@ -4,6 +4,7 @@ from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
 
+from app.core.config import settings
 from app.database.models import ShoppingList, ShoppingItem, Product, ProductSize, PurchaseHistory
 from app.schemas.command import ParsedCommand, IntentEnum, CommandResponse
 from app.services.size_engine import size_decision_engine
@@ -11,7 +12,7 @@ from app.search.vector_service import vector_service
 
 logger = logging.getLogger("uvicorn.error")
 
-SIZE_REGEX = r'\b(\d+(?:\.\d+)?)\s*(ml|milliliter|milliliters|l|liter|liters|g|gram|grams|kg|kilogram|kilograms|oz|lbs|pound|pounds)\b'
+SIZE_REGEX = r'\b(\d+(?:\.\d+)?)\s*(ml|milliliter|milliliters|millilitre|millilitres|l|liter|liters|litre|litres|g|gram|grams|kg|kilogram|kilograms|oz|lbs|pound|pounds)\b'
 
 def normalize_product_query(query_text: str) -> str:
     """
@@ -27,7 +28,7 @@ def normalize_product_query(query_text: str) -> str:
     text = re.sub(SIZE_REGEX, '', text, flags=re.IGNORECASE)
     text = re.sub(r'^\s*(?:add|include|buy|i need|put|get|want|at|please)\b\s*', '', text, flags=re.IGNORECASE)
 
-    stop_words = ["of", "packet", "packets", "bottle", "bottles", "pack", "packs", "can", "cans", "bag", "bags", "piece", "pieces", "gram", "grams", "kg", "ml", "liter", "liters"]
+    stop_words = ["of", "packet", "packets", "bottle", "bottles", "pack", "packs", "can", "cans", "bag", "bags", "piece", "pieces", "pcs", "gram", "grams", "kg", "ml", "liter", "liters", "litre", "litres"]
     for sw in stop_words:
         text = re.sub(r'\b' + re.escape(sw) + r'\b', '', text, flags=re.IGNORECASE)
 
@@ -54,17 +55,18 @@ class ShoppingService:
         4-Step Robust Catalogue Resolution Pipeline:
         Step 1: Exact DB normalized name match
         Step 2: Database lexical / substring match
-        Step 3: Qdrant Cloud semantic search (Top 5 candidates)
+        Step 3: Qdrant Cloud semantic search (Top-K candidates with PRODUCT_SIMILARITY_THRESHOLD)
         Step 4: PostgreSQL candidate validation (PostgreSQL is authoritative source of truth)
         """
         cleaned = normalize_product_query(raw_query)
         if not cleaned:
+            logger.warning(f"[CATALOGUE RESOLUTION] query='{raw_query}' (clean='') | exact_match=false | lexical_match=false | validated_product_id=null | result=PRODUCT_NOT_IN_CATALOGUE")
             return None
 
         # Step 1: Exact normalized name match
         product = db.query(Product).filter(func.lower(Product.name) == cleaned).first()
         if product:
-            logger.info(f"🔎 [CATALOGUE RESOLUTION] query='{raw_query}' (clean='{cleaned}') | database_exact_match='{product.name}' | resolved_product_id='{product.id}' | category='{product.category}'")
+            logger.info(f"🔎 [CATALOGUE RESOLUTION] query='{raw_query}' (clean='{cleaned}') | exact_match=true | validated_product_id='{product.id}' | resolved_product='{product.name}' | category='{product.category}' | result=VALID")
             return product
 
         # Step 2: Lexical DB Substring / ILIKE Match
@@ -77,28 +79,29 @@ class ShoppingService:
         ).all()
         if candidates:
             best_lexical = min(candidates, key=lambda p: abs(len(p.name) - len(cleaned)))
-            logger.info(f"🔎 [CATALOGUE RESOLUTION] query='{raw_query}' (clean='{cleaned}') | database_lexical_match='{best_lexical.name}' | resolved_product_id='{best_lexical.id}' | category='{best_lexical.category}'")
+            logger.info(f"🔎 [CATALOGUE RESOLUTION] query='{raw_query}' (clean='{cleaned}') | lexical_match=true | validated_product_id='{best_lexical.id}' | resolved_product='{best_lexical.name}' | category='{best_lexical.category}' | result=VALID")
             return best_lexical
 
         # Reverse Substring Match (e.g. query is "Amul Pasteurised Butter" -> matches "Butter")
         all_products = db.query(Product).all()
         for p in all_products:
             if p.name.lower() in cleaned or cleaned in p.name.lower():
-                logger.info(f"🔎 [CATALOGUE RESOLUTION] query='{raw_query}' (clean='{cleaned}') | database_substring_match='{p.name}' | resolved_product_id='{p.id}' | category='{p.category}'")
+                logger.info(f"🔎 [CATALOGUE RESOLUTION] query='{raw_query}' (clean='{cleaned}') | database_substring_match=true | validated_product_id='{p.id}' | resolved_product='{p.name}' | category='{p.category}' | result=VALID")
                 return p
 
         # Step 3 & 4: Qdrant Cloud Semantic Search + PostgreSQL Validation
-        vector_candidates = vector_service.search_similar_products(cleaned, limit=5, score_threshold=0.3)
+        threshold = getattr(settings, "PRODUCT_SIMILARITY_THRESHOLD", 0.65)
+        vector_candidates = vector_service.search_similar_products(cleaned, limit=5, score_threshold=threshold)
         for match in vector_candidates:
             p_id = match.get("product_id")
-            if p_id:
+            score = match.get("score", 0.0)
+            if p_id and score >= threshold:
                 product = db.query(Product).filter(Product.id == p_id).first()
                 if product:
-                    score = match.get("score", 0.0)
-                    logger.info(f"🔎 [CATALOGUE RESOLUTION] query='{raw_query}' (clean='{cleaned}') | qdrant_match='{product.name}' | qdrant_score={score:.3f} | resolved_product_id='{product.id}' | category='{product.category}'")
+                    logger.info(f"🔎 [CATALOGUE RESOLUTION] query='{raw_query}' (clean='{cleaned}') | qdrant_candidate='{product.name}' | qdrant_score={score:.3f} | validated_product_id='{product.id}' | category='{product.category}' | result=VALID")
                     return product
 
-        logger.warning(f"🔎 [CATALOGUE RESOLUTION] query='{raw_query}' (clean='{cleaned}') | NOT FOUND in catalogue.")
+        logger.warning(f"🔎 [CATALOGUE RESOLUTION] query='{raw_query}' (clean='{cleaned}') | exact_match=false | lexical_match=false | validated_product_id=null | result=PRODUCT_NOT_IN_CATALOGUE")
         return None
 
     def process_command(self, db: Session, user_id: str, parsed: ParsedCommand) -> CommandResponse:
@@ -155,10 +158,10 @@ class ShoppingService:
             explicit_size = cmd_item.size
 
             try:
-                # ── 1. Brochure / Catalog Resolution Pipeline ──────────
+                # ── 1. Strict Catalogue Resolution Pipeline ──────────
                 product = self.resolve_catalogue_product(db, raw_name)
 
-                # ── CASE A: Product Exists in Brochure Catalog ──────────────
+                # ── CASE A: Product Exists & Validated in Catalogue ──────────────
                 if product:
                     size_result = size_decision_engine.evaluate_size_decision(
                         db=db,
@@ -228,52 +231,18 @@ class ShoppingService:
                     })
                     any_success = True
 
-                # ── CASE B: Product NOT in Brochure Catalog (Unverified Item) ────────────
+                # ── CASE B: Product NOT in Supermarket Catalogue ────────────
                 else:
                     unverified_name = raw_name.strip().capitalize()
-                    not_found_msg = f"I couldn't find '{raw_name}' in this supermarket's catalog. Added '{unverified_name}' to your list anyway."
-
-                    existing_item = (
-                        db.query(ShoppingItem)
-                        .filter(
-                            ShoppingItem.list_id == active_list.id,
-                            ShoppingItem.product_name.ilike(unverified_name)
-                        )
-                        .first()
-                    )
-
-                    if existing_item:
-                        existing_item.quantity += quantity
-                        if explicit_size:
-                            existing_item.size = explicit_size
-                        db.commit()
-                        msg = f"Updated {unverified_name} quantity to {existing_item.quantity}."
-                        messages.append(msg)
-                    else:
-                        new_unverified = ShoppingItem(
-                            list_id=active_list.id,
-                            product_id=None,
-                            product_name=unverified_name,
-                            category="Other",
-                            quantity=quantity,
-                            unit=cmd_item.unit,
-                            size=explicit_size,
-                            is_size_unresolved=False
-                        )
-                        db.add(new_unverified)
-                        db.commit()
-                        messages.append(not_found_msg)
+                    not_found_msg = f"I couldn't find '{unverified_name}' in the supermarket catalogue."
+                    messages.append(not_found_msg)
 
                     item_results.append({
                         "item": raw_name,
                         "product_found": False,
-                        "product_name": unverified_name,
-                        "category": "Other",
-                        "quantity": quantity,
-                        "size": explicit_size,
+                        "error": "PRODUCT_NOT_IN_CATALOGUE",
                         "message": not_found_msg
                     })
-                    any_success = True
 
             except Exception as e:
                 db.rollback()
@@ -285,10 +254,11 @@ class ShoppingService:
             success=any_success,
             message=final_msg,
             parsed=parsed,
-            action_taken="ADD_ITEMS" if len(items_to_process) > 1 else "ADD_ITEM",
+            action_taken="ADD_ITEMS" if any_success else "NONE",
             data={
                 "summary": final_msg,
-                "items": item_results
+                "items": item_results,
+                "error": "PRODUCT_NOT_IN_CATALOGUE" if not any_success else None
             }
         )
 
@@ -361,15 +331,14 @@ class ShoppingService:
                 )
                 .first()
             )
-        
-        # If no specific item named or target item not found by name, check for unresolved items
+
         if not target_item:
             target_item = (
                 db.query(ShoppingItem)
                 .filter(ShoppingItem.list_id == active_list.id, ShoppingItem.is_size_unresolved == True)
                 .first()
             )
-        
+
         if not target_item and len(active_list.items) > 0:
             target_item = active_list.items[-1]
 
@@ -388,7 +357,7 @@ class ShoppingService:
                 product = db.query(Product).filter(Product.id == target_item.product_id).first()
             if not product:
                 product = self.resolve_catalogue_product(db, target_item.product_name)
-            
+
             if product and product.sizes:
                 valid_sizes = [s.size_value.lower() for s in product.sizes]
                 if valid_sizes and requested_size.lower() not in valid_sizes:

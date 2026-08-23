@@ -70,19 +70,45 @@ def test_add_item_separate_size_resolution(db_session: Session):
     assert active_list is not None
     item = db_session.query(ShoppingItem).filter_by(list_id=active_list.id).first()
     assert item is not None
+    assert item.product_id is not None
     assert item.category in ("Dairy", "Dairy & Bakery", "Dairy & Refrigerated", "Breakfast & Dairy")
 
-def test_unknown_product_graceful_fallback(db_session: Session):
-    user_id = "test-user-cat-res-unique-202"
-    prod = shopping_service.resolve_catalogue_product(db_session, "unknown_unregistered_exotic_item_xyz")
+def test_unknown_product_rejection_pranav(db_session: Session):
+    user_id = "test-user-cat-res-unique-pranav"
+    prod = shopping_service.resolve_catalogue_product(db_session, "pranav")
     assert prod is None
 
     cmd = ParsedCommand(
         intent=IntentEnum.ADD_ITEM,
-        item="unknown_unregistered_exotic_item_xyz",
-        quantity=1,
-        items=[CommandItem(item="unknown_unregistered_exotic_item_xyz", quantity=1)]
+        item="pranav",
+        quantity=10,
+        unit="kg",
+        items=[CommandItem(item="pranav", quantity=10, unit="kg")]
     )
     res = shopping_service.process_command(db_session, user_id, cmd)
-    assert res.success is True
-    assert ("couldn't find" in res.message.lower() or "added" in res.message.lower() or "updated" in res.message.lower())
+    assert res.success is False
+    assert "couldn't find" in res.message.lower() or "not available" in res.message.lower()
+
+    # Ensure ZERO items added to shopping list
+    active_list = db_session.query(ShoppingList).filter_by(user_id=user_id, status="ACTIVE").first()
+    item_count = db_session.query(ShoppingItem).filter_by(list_id=active_list.id).count() if active_list else 0
+    assert item_count == 0
+
+def test_unknown_product_rejection_xyz123(db_session: Session):
+    user_id = "test-user-cat-res-unique-xyz123"
+    prod = shopping_service.resolve_catalogue_product(db_session, "xyz123")
+    assert prod is None
+
+    cmd = ParsedCommand(
+        intent=IntentEnum.ADD_ITEM,
+        item="xyz123",
+        quantity=1,
+        items=[CommandItem(item="xyz123", quantity=1)]
+    )
+    res = shopping_service.process_command(db_session, user_id, cmd)
+    assert res.success is False
+    assert "couldn't find" in res.message.lower()
+
+    active_list = db_session.query(ShoppingList).filter_by(user_id=user_id, status="ACTIVE").first()
+    item_count = db_session.query(ShoppingItem).filter_by(list_id=active_list.id).count() if active_list else 0
+    assert item_count == 0

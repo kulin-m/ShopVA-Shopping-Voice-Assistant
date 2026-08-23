@@ -167,16 +167,16 @@ def test_get_shopping_list_unknown_user():
 def test_add_item_manually_valid():
     r = client.post(
         "/api/shopping-list/items?user_id=default-user-id",
-        json={"product_name": "Eggs", "quantity": 2}
+        json={"product_name": "Shampoo", "quantity": 2}
     )
     assert r.status_code == 200
-    assert r.json()["product_name"] == "Eggs"
+    assert r.json()["product_name"] == "Shampoo"
 
 def test_add_item_negative_quantity():
     """Negative quantity must be rejected OR stored without crash."""
     r = client.post(
         "/api/shopping-list/items?user_id=default-user-id",
-        json={"product_name": "TestItem", "quantity": -5}
+        json={"product_name": "Shampoo", "quantity": -5}
     )
     # Should not be 500
     assert r.status_code != 500
@@ -184,14 +184,14 @@ def test_add_item_negative_quantity():
 def test_add_item_zero_quantity():
     r = client.post(
         "/api/shopping-list/items?user_id=default-user-id",
-        json={"product_name": "TestItem", "quantity": 0}
+        json={"product_name": "Shampoo", "quantity": 0}
     )
     assert r.status_code != 500
 
 def test_add_item_extremely_large_quantity():
     r = client.post(
         "/api/shopping-list/items?user_id=default-user-id",
-        json={"product_name": "TestItem", "quantity": 9999999}
+        json={"product_name": "Shampoo", "quantity": 9999999}
     )
     assert r.status_code != 500
 
@@ -233,7 +233,7 @@ def test_resolve_size_empty_size():
     # First add an item
     add = client.post(
         "/api/shopping-list/items?user_id=default-user-id",
-        json={"product_name": "RiceForSizeTest", "quantity": 1}
+        json={"product_name": "Shampoo", "quantity": 1}
     )
     item_id = add.json()["id"]
     r = client.patch(f"/api/shopping-list/items/{item_id}/size", json={"size": ""})

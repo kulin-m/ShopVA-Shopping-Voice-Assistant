@@ -195,20 +195,17 @@ def test_product_categories_resolved_independently(db, shopping_svc):
     assert cats["Shampoo"] == "Personal Care"
 
 def test_unknown_product_category_fallback_to_other(db, shopping_svc):
-    parsed = ParsedCommand(
-        intent=IntentEnum.ADD_ITEMS,
-        items=[
-            CommandItem(item="Milk", quantity=1),
-            CommandItem(item="CustomAlienGadget", quantity=1)
-        ]
+    """Unknown product not in catalogue -> rejected with success=False, 0 items created."""
+    cmd = ParsedCommand(
+        intent=IntentEnum.ADD_ITEM,
+        items=[CommandItem(item="CustomAlienGadget", quantity=1)]
     )
-    res = shopping_svc.process_command(db, "test-user-multi", parsed)
-    assert res.success is True
-
-    active_list = shopping_svc.get_or_create_active_list(db, "test-user-multi")
-    gadget = db.query(ShoppingItem).filter_by(list_id=active_list.id, product_name="Customaliengadget").first()
-    assert gadget is not None
-    assert gadget.category == "Other"
+    res = shopping_svc.process_command(db, "user-multi-cat-test-3", cmd)
+    assert res.success is False
+    assert res.data["error"] == "PRODUCT_NOT_IN_CATALOGUE"
+    active_list = db.query(ShoppingList).filter_by(user_id="user-multi-cat-test-3", status="ACTIVE").first()
+    gadget = db.query(ShoppingItem).filter_by(list_id=active_list.id, product_name="Customaliengadget").first() if active_list else None
+    assert gadget is None
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 3. Size Engine & Unresolved Size Compatibility

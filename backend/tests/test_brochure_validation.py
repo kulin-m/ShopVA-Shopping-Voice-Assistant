@@ -85,10 +85,11 @@ def test_2_product_does_not_exist_in_brochure(db):
         items=[CommandItem(item="Dragon Fruit", quantity=1)]
     )
     res = shopping_service.process_command(db, "user-brochure-test", parsed)
-    assert res.success is True
+    assert res.success is False
     item = res.data["items"][0]
     assert item["product_found"] is False
-    assert "couldn't find 'Dragon Fruit' in this supermarket's catalog" in item["message"]
+    assert item["error"] == "PRODUCT_NOT_IN_CATALOGUE"
+    assert "couldn't find" in item["message"].lower()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 2. Brochure Size Decision Rules (Part 28: 4, 5, 6, 7, 8, 9, 10, 11, 12)

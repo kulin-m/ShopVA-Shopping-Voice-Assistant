@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     QDRANT_URL: Optional[str] = os.getenv("QDRANT_URL", None)
     QDRANT_API_KEY: Optional[str] = os.getenv("QDRANT_API_KEY", None)
     QDRANT_COLLECTION_NAME: str = os.getenv("QDRANT_COLLECTION_NAME", "products")
+    PRODUCT_SIMILARITY_THRESHOLD: float = float(os.getenv("PRODUCT_SIMILARITY_THRESHOLD", "0.65"))
 
     # Business Logic Thresholds
     SIZE_PREFERENCE_THRESHOLD: int = 2
