@@ -1,18 +1,16 @@
 # 🛒 ShopVA — Voice Shopping Assistant
 
-### AI-Powered Voice-First Shopping List Manager
+> **AI-Powered Voice-First Shopping List Manager**
 
 ShopVA is an intelligent voice-first shopping assistant that allows customers to create and manage personalized shopping lists using natural language voice commands.
 
-It combines **React, FastAPI, Groq LLM, Qdrant Cloud, MiniLM embeddings, and Supabase PostgreSQL** to provide voice interaction, catalogue-aware shopping, semantic product search, personalized suggestions, and secure customer-specific shopping lists.
+It combines **React**, **FastAPI**, **Groq LLM**, **Qdrant Cloud**, **MiniLM embeddings**, and **Supabase PostgreSQL** to provide voice interaction, catalogue-aware shopping, semantic product search, personalized suggestions, and secure customer-specific shopping lists.
 
 ---
 
 ## 🚀 Live Application
 
-### Frontend
-
-**https://shop-va-shopping-voice-assistant.vercel.app/**
+- **Frontend:** [https://shop-va-shopping-voice-assistant.vercel.app/](https://shop-va-shopping-voice-assistant.vercel.app/)
 
 ---
 
@@ -22,16 +20,14 @@ It combines **React, FastAPI, Groq LLM, Qdrant Cloud, MiniLM embeddings, and Sup
 
 Users can manage their shopping list using natural voice commands.
 
-Examples:
+**Examples:**
+- *"Add milk"*
+- *"Buy 2 packets of biscuits"*
+- *"I need 500 grams of honey"*
+- *"Remove bread"*
+- *"Update the quantity of rice"*
 
-- "Add milk"
-- "Buy 2 packets of biscuits"
-- "I need 500 grams of honey"
-- "Remove bread"
-- "Update the quantity of rice"
-
-The assistant supports:
-
+**Core Capabilities:**
 - Add items
 - Remove items
 - Update quantities
@@ -50,34 +46,33 @@ For example:
 
 ```text
 "Please buy two packets of biscuits"
-
-        ↓
-
-Intent: ADD_ITEM
-Product: Biscuits
+                ↓
+Intent:   ADD_ITEM
+Product:  Biscuits
 Quantity: 2
-Unit: Packet
+Unit:     Packet
+```
 
-The system can understand different natural-language expressions for the same operation.
+The system can understand different natural-language expressions for the same operation:
+- *"Add milk"*
+- *"Buy milk"*
+- *"I need milk"*
+- *"Include milk in my list"*
+- *"Put milk on my shopping list"*
 
-Examples:
+All map directly to an `ADD_ITEM` operation.
 
-"Add milk"
-"Buy milk"
-"I need milk"
-"Include milk in my list"
-"Put milk on my shopping list"
+> **Fallback:** A deterministic rule-based fallback parser is automatically engaged when LLM parsing is unavailable.
 
-These can all be interpreted as an ADD_ITEM operation.
+---
 
-A deterministic rule-based fallback parser is also available when LLM parsing is unavailable.
-
-🛍️ Catalogue-Aware Shopping
+## 🛍️ Catalogue-Aware Shopping
 
 The supermarket catalogue is the source of truth for products that can be added to the shopping list.
 
-The system follows this workflow:
+### Processing Workflow
 
+```text
 Voice Command
       ↓
 LLM Intent & Entity Extraction
@@ -91,259 +86,152 @@ Catalogue Validation
 Size / Quantity Validation
       ↓
 Add to Shopping List
+```
 
 Only products available in the supermarket catalogue can be added.
 
-Example
+### Example Rejection
 
 If the customer says:
+> *"Add medicine"*
 
-"Add medicine"
+and **Medicine** is not available in the supermarket catalogue, the system rejects the request instead of adding an arbitrary product name. The assistant responds appropriately without creating an invalid shopping-list item, preventing unknown or hallucinated products from entering the database.
 
-and Medicine is not available in the supermarket catalogue, the system rejects the request instead of adding an arbitrary product name.
+### Catalogue Validation Principle
 
-The assistant responds appropriately without creating an invalid shopping-list item.
+- **LLM:** Responsible for understanding what the customer said.
+- **Catalogue:** Responsible for determining whether the product actually exists.
 
-This prevents unknown or hallucinated products from entering the shopping list.
+```text
+LLM:       "What product did the customer request?"
+                         ↓
+Catalogue: "Does this product exist?"
+                         ↓
+             YES → Continue
+             NO  → Reject request
+```
 
-Catalogue Validation Principle
+---
 
-The LLM is responsible for understanding what the customer said.
+## 📦 Intelligent Size & Quantity Management
 
-The catalogue is responsible for determining whether the product actually exists.
-
-LLM
- ↓
-"What product did the customer request?"
-
-        ↓
-
-Catalogue
- ↓
-"Does this product exist?"
-
-        ↓
-
-YES → Continue
-NO  → Reject request
-📦 Intelligent Size & Quantity Management
-
-ShopVA separates:
-
-Product
-Quantity
-Unit
-Package size
+ShopVA explicitly separates:
+- **Product**
+- **Quantity**
+- **Unit**
+- **Package size**
 
 This separation prevents incorrect quantity and size conversions.
 
-For example:
+**Example:**
+- Command: *"Add 500g honey"*
+- **Correct Interpretation:** `Product: Honey`, `Quantity: 1`, `Size: 500g`
+- **Avoided Bug:** `Size: 5g`
 
-"Add 500g honey"
+### Size Selection Rules
 
-must remain:
+- **User specifies size** (*"Add 500g honey"*): The requested size is preserved and checked against catalogue inventory.
+- **User does not specify size** (*"Add shampoo"*):
+  1. Checks available catalogue sizes.
+  2. Checks customer recent purchase history.
+  3. Uses a suitable previously purchased size if matching criteria are met.
+  4. Otherwise, prompts the customer to choose from available catalogue sizes.
 
-Product: Honey
-Quantity: 1
-Size: 500g
+The size-selection process is deterministic and does not permit the LLM to invent catalogue sizes.
 
-and must not become:
+---
 
-Size: 5g
-Size Selection
-
-If the customer specifies a size:
-
-"Add 500g honey"
-
-the requested size is preserved and checked against the catalogue.
-
-If the customer does not specify a size:
-
-"Add shampoo"
-
-the system:
-
-Checks the available catalogue sizes.
-Checks the customer's recent purchase history.
-Looks at the customer's previous purchasing pattern.
-Uses a suitable previously purchased size when the defined history rule is satisfied.
-Otherwise asks the customer to choose from the available sizes.
-
-The size-selection process is deterministic and does not allow the LLM to invent catalogue sizes.
-
-🤖 Smart Suggestions
+## 🤖 Smart Suggestions
 
 ShopVA provides personalized recommendations using the customer's shopping history.
 
-Co-Purchase Recommendations
+### Co-Purchase Recommendations
 
-The system analyzes the customer's last 3 completed shopping lists to identify products that are frequently purchased together.
+The system analyzes the customer's last 3 completed shopping lists to identify products frequently purchased together.
 
-For example:
+```text
+List 1: Bread + Jam
+List 2: Bread + Jam
+List 3: Bread + Milk
+```
 
-List 1:
-Bread + Jam
+When the customer adds **Bread**, the system suggests **Jam** based on their individual co-purchase frequency rather than a global list.
 
-List 2:
-Bread + Jam
+---
 
-List 3:
-Bread + Milk
+## 🔎 Semantic Product Search
 
-When the customer adds:
+ShopVA uses vector similarity search to resolve product queries that do not match catalogue names verbatim.
 
-Bread
+### Tech Stack for Search
+- **Vector Database:** Qdrant Cloud
+- **Search Type:** Dense vector search
+- **Model:** `sentence-transformers/all-MiniLM-L6-v2` (384-dimensional embeddings)
 
-the system can suggest:
-
-Jam
-
-because Jam appeared together with Bread in multiple recent shopping lists.
-
-The recommendations are based on the individual customer's purchase history rather than a global shopping list.
-
-🔎 Semantic Product Search
-
-ShopVA uses vector similarity search to understand product queries that may not exactly match catalogue names.
-
-Technologies
-Qdrant Cloud
-Dense vector search
-sentence-transformers/all-MiniLM-L6-v2
-384-dimensional embeddings
-
-Example:
-
-Customer Query
-      ↓
-Semantic Search
-      ↓
-Relevant Catalogue Candidates
-      ↓
-Catalogue Validation
-      ↓
+```text
+Customer Query 
+      ↓ 
+Semantic Search 
+      ↓ 
+Relevant Catalogue Candidates 
+      ↓ 
+Catalogue Validation 
+      ↓ 
 Valid Product
+```
 
-Semantic search is used to retrieve relevant catalogue candidates.
+> **Note:** Semantic search outputs are strictly treated as candidates. The backend validates resolved items against the active relational catalogue before mutating the list to eliminate false positives.
 
-However, a semantic-search result is not automatically considered a valid product.
+---
 
-The backend validates the resolved product against the actual supermarket catalogue before adding it to the shopping list.
+## 🗂️ Product Categories
 
-This prevents semantic-search false positives and hallucinated products.
+Products are categorized into:
+- Dairy
+- Fruits & Vegetables
+- Bakery & Snacks
+- Beverages
+- Staples
+- Personal Care & Household
+- Frozen Foods & Condiments
 
-🗂️ Product Categories
+The UI features an **"According to category"** toggle to organize large shopping lists into structured groups.
 
-The supermarket catalogue contains products organized into categories such as:
+---
 
-Dairy
-Fruits
-Vegetables
-Bakery
-Snacks
-Beverages
-Staples
-Personal Care
-Household
-Frozen Foods
-Condiments
-Breakfast
-And more
+## 👤 Customer Accounts & Data Isolation
 
-The shopping list provides an:
+ShopVA supports multi-tenant customer accounts:
+- Independent shopping lists and items
+- Customer-specific purchase history and suggestions
+- Sign Up & Login with secure password hashing (PBKDF2-HMAC-SHA256)
+- JWT bearer authentication with server-side identity derivation
+- Built-in Insecure Direct Object Reference (IDOR) protection
 
-According to category
+---
 
-toggle.
+## 🎧 Voice Interaction Controls
 
-When enabled, products are organized according to their catalogue category.
+- **Continuous Voice Listening:** Toggles persistent background command listening until manually stopped.
+- **Assistant Voice (TTS):** Independent control to enable/disable spoken responses.
+- **Echo Prevention:** Prevents assistant text-to-speech output from looping into speech recognition as new input.
 
-This makes large shopping lists easier to navigate.
+---
 
-👤 Customer Accounts & Data Isolation
+## 🖥️ User Interface Features
 
-ShopVA supports individual customer accounts.
+- Voice command interface with real-time visual feedback
+- Shopping list with manual entry and item quantity steppers
+- Product size modal selectors
+- Category grouping view
+- Personalized recommendation prompts
+- Authentication (Sign up / Login) screens
 
-Each customer has their own:
+---
 
-Shopping list
-Shopping items
-Purchase history
-Shopping suggestions
+## 🏗️ System Architecture
 
-The application provides:
-
-Sign Up
-Login
-JWT authentication
-Secure password hashing
-Customer-specific shopping lists
-Customer-specific purchase history
-IDOR protection
-Server-side identity validation
-
-A customer cannot access another customer's shopping data.
-
-The backend derives the authenticated customer from the validated JWT rather than trusting a customer ID supplied by the frontend.
-
-🎧 Voice Interaction Controls
-Continuous Voice Listening
-
-The application provides a dedicated voice-listening toggle.
-
-When enabled:
-
-Voice Listening = ON
-        ↓
-Continuously listen for commands
-        ↓
-Process customer commands
-
-The assistant continues listening until the customer manually turns the listening mode off.
-
-Assistant Voice
-
-The application also provides a separate Assistant Voice toggle.
-
-This controls whether the assistant speaks its responses using text-to-speech.
-
-The two controls are independent:
-
-Voice Listening
-       ≠
-Assistant Voice
-
-Therefore:
-
-Listening can be ON while Assistant Voice is OFF.
-Assistant Voice can be disabled without disabling command recognition.
-
-The application also prevents assistant-generated speech from being interpreted as a new customer command.
-
-🖥️ User Interface
-
-The application provides a simple shopping-focused interface.
-
-Main UI Features
-Voice command interface
-Shopping list
-Manual item entry
-Quantity controls
-Product size handling
-Category sorting
-Smart suggestions
-Catalogue validation
-Purchase completion
-Login
-Signup
-Real-time command feedback
-Voice listening controls
-Assistant voice controls
-
-The interface is designed around a minimal and straightforward shopping workflow.
-
-🏗️ System Architecture
+```text
                          Customer
                             │
                 ┌───────────┴───────────┐
@@ -376,10 +264,13 @@ The interface is designed around a minimal and straightforward shopping workflow
                            │
                            ▼
                     Voice Response
-🔄 Request Processing Architecture
+```
 
-ShopVA separates AI interpretation from deterministic application logic.
+---
 
+## 🔄 Request Processing Architecture
+
+```text
 Customer Voice Command
           │
           ▼
@@ -417,348 +308,128 @@ Catalogue Resolver
                   │
           ▼
         Voice Response
-🧰 Technology Stack
-Component	Technology
-Frontend	React 19, Vite, Tailwind CSS
-Voice Input	Web Speech API
-Voice Output	SpeechSynthesis API
-Icons	Lucide Icons
-HTTP Client	Axios
-Backend	Python 3.11+, FastAPI
-Validation	Pydantic v2
-ORM	SQLAlchemy
-Server	Uvicorn
-Testing	Pytest
-Database	Supabase PostgreSQL
-Authentication	JWT Bearer Authentication
-Password Security	PBKDF2-HMAC-SHA256
-LLM / NLU	Groq API
-Vector Database	Qdrant Cloud
-Embeddings	sentence-transformers/all-MiniLM-L6-v2
-Hosting	Vercel + Render + Cloud Services
-📁 Repository Structure
+```
+
+---
+
+## 🧰 Technology Stack
+
+| Layer | Technology |
+| :--- | :--- |
+| **Frontend** | React 19, Vite, Tailwind CSS |
+| **Voice Input** | Web Speech API |
+| **Voice Output** | SpeechSynthesis API |
+| **Icons & UI** | Lucide Icons, Axios |
+| **Backend Framework** | Python 3.11+, FastAPI, Uvicorn |
+| **Validation & ORM** | Pydantic v2, SQLAlchemy |
+| **Database** | Supabase PostgreSQL |
+| **Security & Auth** | JWT Bearer Authentication, PBKDF2-HMAC-SHA256 |
+| **LLM / NLU** | Groq API |
+| **Vector Search** | Qdrant Cloud |
+| **Embeddings** | `sentence-transformers/all-MiniLM-L6-v2` |
+| **Testing & Hosting** | Pytest, Vercel, Render |
+
+---
+
+## 📁 Repository Structure
+
+```text
 ShopVA-Shopping-Voice-Assistant/
 │
 ├── backend/
 │   ├── app/
-│   │   ├── ai/
-│   │   │   └── Groq LLM and NLP fallback
-│   │   ├── api/
-│   │   │   └── Authentication, Commands,
-│   │   │       Shopping, Products and Suggestions
-│   │   ├── core/
-│   │   │   └── Security and configuration
-│   │   ├── database/
-│   │   │   └── SQLAlchemy models and database logic
-│   │   ├── recommendations/
-│   │   │   └── Co-purchase recommendation engine
-│   │   ├── schemas/
-│   │   │   └── Pydantic schemas
-│   │   ├── search/
-│   │   │   └── Qdrant and semantic search services
-│   │   └── services/
-│   │       └── Shopping and size decision logic
-│   ├── tests/
+│   │   ├── ai/              # Groq LLM and NLP fallback
+│   │   ├── api/             # Authentication, Commands, Shopping, Products, Suggestions
+│   │   ├── core/            # Security and configuration
+│   │   ├── database/        # SQLAlchemy models and database sessions
+│   │   ├── recommendations/ # Co-purchase recommendation engine
+│   │   ├── schemas/         # Pydantic request/response schemas
+│   │   ├── search/          # Qdrant and semantic search services
+│   │   └── services/        # Shopping and size decision logic
+│   ├── tests/               # Pytest suite
 │   ├── .env.example
 │   └── requirements.txt
 │
 ├── frontend/
 │   ├── src/
-│   │   ├── components/
-│   │   ├── context/
-│   │   └── services/
+│   │   ├── components/      # UI, voice, and list components
+│   │   ├── context/         # Auth and state management
+│   │   └── services/        # API and Speech API wrappers
 │   ├── .env.example
 │   └── package.json
 │
 ├── scripts/
-│   └── import_products.py
+│   └── import_products.py   # Catalogue bulk import script
 │
 ├── .gitignore
 ├── .env.example
 ├── requirements.txt
 └── README.md
-🔐 Security & Data Isolation
+```
 
-ShopVA follows a security-focused architecture.
+---
 
-No Hardcoded Secrets
+## 🔐 Security & Data Isolation
 
-API keys, database credentials, JWT secrets, and other sensitive configuration are supplied through environment variables.
+- **No Hardcoded Secrets:** Credentials, JWT keys, and API tokens are managed via environment variables.
+- **Server-Derived Identity:** Customer identity is resolved strictly via validated JWT payloads, mitigating IDOR vulnerabilities.
+- **Catalogue Boundary Enforcement:** Prevents arbitrary client-injected product names from writing to user lists.
 
-Sensitive credentials are not committed to the public repository.
+---
 
-Server-Derived Identity
+## 🧠 AI + Deterministic Business Logic
 
-Customer identity is derived from the validated JWT token.
+| Component | Responsibility |
+| :--- | :--- |
+| **LLM** | Extracts intent, product candidate, quantity, and requested units from natural language. |
+| **Backend Logic** | Confirms availability, enforces sizes, queries purchase history, and handles suggestions. |
 
-The backend does not trust a customer ID supplied directly by the frontend.
+---
 
-IDOR Protection
+## 🛡️ Validation & Size Decision Flows
 
-Shopping lists, shopping items, and purchase history are restricted to the authenticated customer.
+### Catalogue Validation Flow
 
-Catalogue Validation
+```text
+Command: "Add medicine"
+                ↓
+    Intent: ADD_ITEM | Product: Medicine
+                ↓
+    Does "Medicine" exist in catalogue?
+         ├── YES → Validate Size & Quantity → Add Item
+         └── NO  → Reject Request → Notify Customer
+```
 
-Products must be validated against the supermarket catalogue before they can be added.
+### Deterministic Size Decision Flow
 
-The LLM cannot directly create arbitrary catalogue products.
+```text
+Command: "Add honey" (Unspecified Size)
+                ↓
+    Query Catalogue for Available Sizes
+                ↓
+    Check User Recent Purchase History
+                ↓
+    Found matching past purchase?
+         ├── YES → Apply standard past size
+         └── NO  → Prompt customer to select variant
+```
 
-Semantic Search Validation
+---
 
-Qdrant results are treated as candidate results.
+## 🎯 Project Highlights
 
-The backend validates the corresponding catalogue product before accepting the item.
+- 🎙️ Voice-first shopping interaction
+- 🧠 LLM-based natural language understanding
+- 🔎 Semantic product retrieval with Qdrant
+- 🛍️ Catalogue-grounded product validation
+- 📦 Deterministic size decision engine
+- 🤖 Personalized co-purchase recommendations
+- 👤 Secure customer data isolation & JWT authentication
+- 🗂️ Category-based organization
+- ☁️ Cloud-hosted serverless architecture
 
-🧠 AI + Deterministic Business Logic
+---
 
-A key design principle of ShopVA is separating language understanding from business decisions.
-
-LLM Responsibilities
-
-The LLM understands what the customer is asking.
-
-For example:
-
-"Can you put two bottles of shampoo on my list?"
-
-        ↓
-
-Intent: ADD_ITEM
-Product: Shampoo
-Quantity: 2
-Unit: Bottle
-Backend Responsibilities
-
-The backend determines:
-
-Whether the product exists.
-Whether the product is available.
-Which category it belongs to.
-Which sizes are available.
-Whether the requested size is valid.
-Whether previous purchase history should influence size selection.
-Whether the item can be added.
-Which recommendations should be generated.
-
-This prevents the LLM from inventing:
-
-Products
-Sizes
-Categories
-Catalogue availability
-📊 End-to-End Shopping Workflow
-Customer Voice Command
-          │
-          ▼
-Speech Recognition
-          │
-          ▼
-LLM Intent & Entity Extraction
-          │
-          ▼
-Product Resolution
-          │
-          ▼
-Semantic Catalogue Search
-          │
-          ▼
-Catalogue Validation
-          │
-          ▼
-Quantity & Size Processing
-          │
-          ▼
-Purchase History Analysis
-          │
-          ▼
-Shopping List Update
-          │
-          ▼
-Smart Suggestions
-          │
-          ▼
-Voice Confirmation
-🧪 Reliability & Error Handling
-
-The application is designed to handle common AI, voice, database, and catalogue failures.
-
-Examples include:
-
-Unknown products
-Products not present in the catalogue
-Unsupported product sizes
-Missing quantities
-Invalid commands
-LLM API failures
-Voice recognition failures
-Authentication failures
-Database connection failures
-Semantic search failures
-Invalid catalogue matches
-
-The backend validates AI output before performing shopping-list operations.
-
-🛡️ Example Catalogue Validation
-
-Consider the command:
-
-"Add medicine"
-
-The LLM may correctly understand:
-
-Intent: ADD_ITEM
-Product: Medicine
-
-However, the backend then checks:
-
-Does "Medicine" exist in the supermarket catalogue?
-If YES
-Catalogue Product Found
-        ↓
-Validate Size
-        ↓
-Validate Quantity
-        ↓
-Add to Shopping List
-If NO
-Catalogue Product Not Found
-        ↓
-Reject Request
-        ↓
-Do NOT create ShoppingListItem
-        ↓
-Inform Customer
-
-This ensures that an arbitrary product name cannot be inserted into the shopping list simply because the LLM recognized it.
-
-📏 Example Size Handling
-User specifies size
-"Add 500g honey"
-
-Expected interpretation:
-
-Product  = Honey
-Quantity = 1
-Size     = 500g
-
-The system checks whether the requested size exists in the catalogue.
-
-User does not specify size
-"Add honey"
-
-The system:
-
-Honey
-  ↓
-Check catalogue sizes
-  ↓
-Check recent purchase history
-  ↓
-Previous suitable size?
-  ├── YES → Use it
-  │
-  └── NO → Ask customer to select size
-
-The assistant never speaks internal placeholders such as:
-
-_
-____
-______
-
-Missing values are represented semantically and the customer is given a proper size-selection option.
-
-🤖 Example Smart Suggestion
-
-Suppose the customer's completed lists are:
-
-Shopping List 1:
-Bread
-Jam
-Milk
-
-Shopping List 2:
-Bread
-Jam
-Butter
-
-Shopping List 3:
-Bread
-Jam
-Eggs
-
-The system detects:
-
-Bread + Jam
-
-as a repeated co-purchase relationship.
-
-When the customer adds:
-
-Bread
-
-the assistant can suggest:
-
-You frequently buy Jam with Bread.
-Would you like to add Jam?
-
-The recommendation is based on the customer's own purchase history.
-
-🎯 Project Highlights
-🎙️ Voice-first shopping interaction
-🧠 LLM-based natural language understanding
-🔎 Semantic product retrieval
-🛍️ Catalogue-grounded product validation
-📦 Deterministic size decision engine
-🤖 Personalized co-purchase recommendations
-👤 Secure customer-specific shopping lists
-🔐 JWT authentication
-🛡️ IDOR protection
-🗂️ Category-based shopping list organization
-🎧 Continuous voice interaction
-🔊 Independent assistant voice control
-☁️ Cloud-hosted architecture
-🧪 Automated backend testing
-🔒 Environment-based secret management
-🌐 Deployment
-
-The production frontend is hosted at:
-
-https://shop-va-shopping-voice-assistant.vercel.app/
-
-The application uses cloud-hosted backend, database, vector-search, and AI services.
-
-Sensitive service credentials are managed through deployment environment variables rather than being stored in the repository.
-
-🎯 Design Philosophy
-
-ShopVA combines modern AI capabilities with deterministic software engineering.
-
-The application does not rely entirely on an LLM for business decisions.
-
-Instead:
-
-LLM
-  ↓
-Understand the customer's language
-
-Catalogue
-  ↓
-Confirm that the product exists
-
-Backend
-  ↓
-Validate the request
-
-Business Logic
-  ↓
-Determine quantity, size and recommendations
-
-Database
-  ↓
-Persist customer-specific data
-
-This architecture improves reliability, reduces hallucinated catalogue products, and keeps customer data isolated.
-
-📄 License
+## 📄 License
 
 This project was developed as a software engineering technical assessment and demonstration of an AI-powered voice shopping application.
