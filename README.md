@@ -1,189 +1,764 @@
-# 🛒 Voice Shopping Assistant
+# 🛒 ShopVA — Voice Shopping Assistant
 
-An intelligent, voice-first shopping assistant powered by **FastAPI**, **React**, **Groq LLM**, **Qdrant Vector Cloud**, **MiniLM Embeddings**, and **Supabase PostgreSQL**.
+### AI-Powered Voice-First Shopping List Manager
 
----
+ShopVA is an intelligent voice-first shopping assistant that allows customers to create and manage personalized shopping lists using natural language voice commands.
 
-## 🌟 Overview
-
-The **Voice Shopping Assistant** allows users to build and manage personal shopping lists using natural language voice commands. The system features:
-
-- **Continuous Voice Listening**: Real-time microphone listening via Web Speech API.
-- **Smart Assistant Voice (TTS)**: Spoken audio feedback via SpeechSynthesis with a dedicated **Assistant Voice ON/OFF** toggle, stale closure prevention, and instant cancellation.
-- **LLM Entity Extraction**: Groq NLU (`openai/gpt-oss-20b` / `llama-3.3-70b-versatile`) with deterministic rule-based fallback parser.
-- **5-Rule Size Decision Engine**: Solves size selection deterministically using catalog availability and historical purchase preferences ($\ge 2/3$ frequency rule).
-- **Expanded Indian Supermarket Catalogue**: 114+ everyday products across 16 categories with size variants.
-- **Co-Purchase Recommendation Engine**: Mines the user's last 3 completed shopping lists to suggest complementary items.
-- **Customer Authentication & IDOR Protection**: JWT Bearer authentication with personal shopping list data isolation.
-- **Semantic Product Search**: Dense 384-dimensional vector retrieval using MiniLM `all-MiniLM-L6-v2` and Qdrant Cloud.
+It combines **React, FastAPI, Groq LLM, Qdrant Cloud, MiniLM embeddings, and Supabase PostgreSQL** to provide voice interaction, catalogue-aware shopping, semantic product search, personalized suggestions, and secure customer-specific shopping lists.
 
 ---
 
-## 🏗️ System Architecture
+## 🚀 Live Application
 
-```
-                                    User Voice / UI
-                                          │
-                        ┌─────────────────┴─────────────────┐
-                        ▼                                   ▼
-              SpeechRecognition (STT)              SpeechSynthesis (TTS)
-                        │                                   ▲
-                        ▼                                   │
-                React Frontend ────────── JWT Token ────────┼─── (Voice Toggle)
-                        │                                   │
-                        ▼ (HTTP REST API)                   │
-                FastAPI Backend ────────────────────────────┘
-                        │
-      ┌─────────────────┼─────────────────┬─────────────────┐
-      ▼                 ▼                 ▼                 ▼
-   Groq LLM       Size Decision       Co-Purchase       Qdrant Vector
-   (NLU Parsing)     Engine          Engine & DB         (MiniLM Search)
-                        │                 │
-                        └────────┬────────┘
-                                 ▼
-                    Supabase / PostgreSQL DB
-```
+### Frontend
+
+**https://shop-va-shopping-voice-assistant.vercel.app/**
 
 ---
 
-## 🧰 Tech Stack
+## 🌟 Key Features
 
-| Component | Technology |
-|---|---|
-| **Frontend** | React 19, Vite, Tailwind CSS, Web Speech API, SpeechSynthesis API, Lucide Icons, Axios |
-| **Backend** | Python 3.11+, FastAPI, Pydantic v2, SQLAlchemy, Uvicorn, Pytest |
-| **Database** | Supabase PostgreSQL (Production) / SQLite (Local Development) |
-| **Authentication** | Bearer JWT (PBKDF2-HMAC-SHA256 password hashing) |
-| **Vector Store** | Qdrant Cloud (`sentence-transformers` / `all-MiniLM-L6-v2`) |
-| **LLM & NLU** | Groq API (`openai/gpt-oss-20b` or `llama-3.3-70b-versatile`) |
+### 🎙️ Voice Shopping
+
+Users can manage their shopping list using natural voice commands.
+
+Examples:
+
+- "Add milk"
+- "Buy 2 packets of biscuits"
+- "I need 500 grams of honey"
+- "Remove bread"
+- "Update the quantity of rice"
+
+The assistant supports:
+
+- Add items
+- Remove items
+- Update quantities
+- Natural-language commands
+- Continuous voice listening
+- Assistant Voice ON/OFF control
+- Real-time command feedback
 
 ---
 
-## 📁 Repository Structure
+## 🧠 Natural Language Understanding
+
+ShopVA uses a Groq-powered Large Language Model to understand the customer's natural language and identify the requested task.
+
+For example:
 
 ```text
+"Please buy two packets of biscuits"
+
+        ↓
+
+Intent: ADD_ITEM
+Product: Biscuits
+Quantity: 2
+Unit: Packet
+
+The system can understand different natural-language expressions for the same operation.
+
+Examples:
+
+"Add milk"
+"Buy milk"
+"I need milk"
+"Include milk in my list"
+"Put milk on my shopping list"
+
+These can all be interpreted as an ADD_ITEM operation.
+
+A deterministic rule-based fallback parser is also available when LLM parsing is unavailable.
+
+🛍️ Catalogue-Aware Shopping
+
+The supermarket catalogue is the source of truth for products that can be added to the shopping list.
+
+The system follows this workflow:
+
+Voice Command
+      ↓
+LLM Intent & Entity Extraction
+      ↓
+Product Resolution
+      ↓
+Catalogue Search
+      ↓
+Catalogue Validation
+      ↓
+Size / Quantity Validation
+      ↓
+Add to Shopping List
+
+Only products available in the supermarket catalogue can be added.
+
+Example
+
+If the customer says:
+
+"Add medicine"
+
+and Medicine is not available in the supermarket catalogue, the system rejects the request instead of adding an arbitrary product name.
+
+The assistant responds appropriately without creating an invalid shopping-list item.
+
+This prevents unknown or hallucinated products from entering the shopping list.
+
+Catalogue Validation Principle
+
+The LLM is responsible for understanding what the customer said.
+
+The catalogue is responsible for determining whether the product actually exists.
+
+LLM
+ ↓
+"What product did the customer request?"
+
+        ↓
+
+Catalogue
+ ↓
+"Does this product exist?"
+
+        ↓
+
+YES → Continue
+NO  → Reject request
+📦 Intelligent Size & Quantity Management
+
+ShopVA separates:
+
+Product
+Quantity
+Unit
+Package size
+
+This separation prevents incorrect quantity and size conversions.
+
+For example:
+
+"Add 500g honey"
+
+must remain:
+
+Product: Honey
+Quantity: 1
+Size: 500g
+
+and must not become:
+
+Size: 5g
+Size Selection
+
+If the customer specifies a size:
+
+"Add 500g honey"
+
+the requested size is preserved and checked against the catalogue.
+
+If the customer does not specify a size:
+
+"Add shampoo"
+
+the system:
+
+Checks the available catalogue sizes.
+Checks the customer's recent purchase history.
+Looks at the customer's previous purchasing pattern.
+Uses a suitable previously purchased size when the defined history rule is satisfied.
+Otherwise asks the customer to choose from the available sizes.
+
+The size-selection process is deterministic and does not allow the LLM to invent catalogue sizes.
+
+🤖 Smart Suggestions
+
+ShopVA provides personalized recommendations using the customer's shopping history.
+
+Co-Purchase Recommendations
+
+The system analyzes the customer's last 3 completed shopping lists to identify products that are frequently purchased together.
+
+For example:
+
+List 1:
+Bread + Jam
+
+List 2:
+Bread + Jam
+
+List 3:
+Bread + Milk
+
+When the customer adds:
+
+Bread
+
+the system can suggest:
+
+Jam
+
+because Jam appeared together with Bread in multiple recent shopping lists.
+
+The recommendations are based on the individual customer's purchase history rather than a global shopping list.
+
+🔎 Semantic Product Search
+
+ShopVA uses vector similarity search to understand product queries that may not exactly match catalogue names.
+
+Technologies
+Qdrant Cloud
+Dense vector search
+sentence-transformers/all-MiniLM-L6-v2
+384-dimensional embeddings
+
+Example:
+
+Customer Query
+      ↓
+Semantic Search
+      ↓
+Relevant Catalogue Candidates
+      ↓
+Catalogue Validation
+      ↓
+Valid Product
+
+Semantic search is used to retrieve relevant catalogue candidates.
+
+However, a semantic-search result is not automatically considered a valid product.
+
+The backend validates the resolved product against the actual supermarket catalogue before adding it to the shopping list.
+
+This prevents semantic-search false positives and hallucinated products.
+
+🗂️ Product Categories
+
+The supermarket catalogue contains products organized into categories such as:
+
+Dairy
+Fruits
+Vegetables
+Bakery
+Snacks
+Beverages
+Staples
+Personal Care
+Household
+Frozen Foods
+Condiments
+Breakfast
+And more
+
+The shopping list provides an:
+
+According to category
+
+toggle.
+
+When enabled, products are organized according to their catalogue category.
+
+This makes large shopping lists easier to navigate.
+
+👤 Customer Accounts & Data Isolation
+
+ShopVA supports individual customer accounts.
+
+Each customer has their own:
+
+Shopping list
+Shopping items
+Purchase history
+Shopping suggestions
+
+The application provides:
+
+Sign Up
+Login
+JWT authentication
+Secure password hashing
+Customer-specific shopping lists
+Customer-specific purchase history
+IDOR protection
+Server-side identity validation
+
+A customer cannot access another customer's shopping data.
+
+The backend derives the authenticated customer from the validated JWT rather than trusting a customer ID supplied by the frontend.
+
+🎧 Voice Interaction Controls
+Continuous Voice Listening
+
+The application provides a dedicated voice-listening toggle.
+
+When enabled:
+
+Voice Listening = ON
+        ↓
+Continuously listen for commands
+        ↓
+Process customer commands
+
+The assistant continues listening until the customer manually turns the listening mode off.
+
+Assistant Voice
+
+The application also provides a separate Assistant Voice toggle.
+
+This controls whether the assistant speaks its responses using text-to-speech.
+
+The two controls are independent:
+
+Voice Listening
+       ≠
+Assistant Voice
+
+Therefore:
+
+Listening can be ON while Assistant Voice is OFF.
+Assistant Voice can be disabled without disabling command recognition.
+
+The application also prevents assistant-generated speech from being interpreted as a new customer command.
+
+🖥️ User Interface
+
+The application provides a simple shopping-focused interface.
+
+Main UI Features
+Voice command interface
+Shopping list
+Manual item entry
+Quantity controls
+Product size handling
+Category sorting
+Smart suggestions
+Catalogue validation
+Purchase completion
+Login
+Signup
+Real-time command feedback
+Voice listening controls
+Assistant voice controls
+
+The interface is designed around a minimal and straightforward shopping workflow.
+
+🏗️ System Architecture
+                         Customer
+                            │
+                ┌───────────┴───────────┐
+                │                       │
+          Voice Input                UI Input
+                │                       │
+                ▼                       ▼
+       Speech Recognition          React Frontend
+                │                       │
+                └───────────┬───────────┘
+                            │
+                            ▼
+                    FastAPI Backend
+                            │
+       ┌────────────────────┼────────────────────┐
+       │                    │                    │
+       ▼                    ▼                    ▼
+    Groq LLM          Catalogue Engine      Suggestions
+       │                    │                    │
+       │              ┌─────┴─────┐              │
+       │              │           │              │
+       │              ▼           ▼              │
+       │        PostgreSQL     Qdrant             │
+       │                      + MiniLM            │
+       │                                           │
+       └───────────────────┬───────────────────────┘
+                           │
+                           ▼
+                    Shopping List
+                           │
+                           ▼
+                    Voice Response
+🔄 Request Processing Architecture
+
+ShopVA separates AI interpretation from deterministic application logic.
+
+Customer Voice Command
+          │
+          ▼
+Speech Recognition
+          │
+          ▼
+LLM / NLP Layer
+          │
+          ▼
+Intent + Product + Quantity + Size
+          │
+          ▼
+Catalogue Resolver
+          │
+          ├───────────────┐
+          ▼               ▼
+   PostgreSQL          Qdrant
+   Catalogue         Semantic Search
+          │               │
+          └───────┬───────┘
+                  ▼
+          Catalogue Validation
+                  │
+          ▼
+       Quantity / Size Engine
+                  │
+          ▼
+       Purchase History
+                  │
+          ▼
+        Shopping List
+                  │
+          ▼
+        Suggestions
+                  │
+          ▼
+        Voice Response
+🧰 Technology Stack
+Component	Technology
+Frontend	React 19, Vite, Tailwind CSS
+Voice Input	Web Speech API
+Voice Output	SpeechSynthesis API
+Icons	Lucide Icons
+HTTP Client	Axios
+Backend	Python 3.11+, FastAPI
+Validation	Pydantic v2
+ORM	SQLAlchemy
+Server	Uvicorn
+Testing	Pytest
+Database	Supabase PostgreSQL
+Authentication	JWT Bearer Authentication
+Password Security	PBKDF2-HMAC-SHA256
+LLM / NLU	Groq API
+Vector Database	Qdrant Cloud
+Embeddings	sentence-transformers/all-MiniLM-L6-v2
+Hosting	Vercel + Render + Cloud Services
+📁 Repository Structure
+ShopVA-Shopping-Voice-Assistant/
+│
 ├── backend/
 │   ├── app/
-│   │   ├── ai/            # Groq LLM integration & Rule NLP fallback
-│   │   ├── api/           # Auth, Commands, Shopping, Products, Suggestions routes
-│   │   ├── core/          # Security (JWT, Password hashing) & Config settings
-│   │   ├── database/      # SQLAlchemy ORM models & database migrations
-│   │   ├── recommendations/# Co-Purchase recommendation engine
-│   │   ├── schemas/       # Pydantic data schemas
-│   │   ├── search/        # Qdrant & MiniLM vector search service
-│   │   └── services/      # Size decision engine & shopping business logic
-│   ├── tests/             # Automated test suite (339 test cases)
-│   ├── .env.example       # Backend environment variables template
-│   ├── main.py            # FastAPI entrypoint
-│   └── requirements.txt   # Backend Python dependencies
+│   │   ├── ai/
+│   │   │   └── Groq LLM and NLP fallback
+│   │   ├── api/
+│   │   │   └── Authentication, Commands,
+│   │   │       Shopping, Products and Suggestions
+│   │   ├── core/
+│   │   │   └── Security and configuration
+│   │   ├── database/
+│   │   │   └── SQLAlchemy models and database logic
+│   │   ├── recommendations/
+│   │   │   └── Co-purchase recommendation engine
+│   │   ├── schemas/
+│   │   │   └── Pydantic schemas
+│   │   ├── search/
+│   │   │   └── Qdrant and semantic search services
+│   │   └── services/
+│   │       └── Shopping and size decision logic
+│   ├── tests/
+│   ├── .env.example
+│   └── requirements.txt
+│
 ├── frontend/
 │   ├── src/
-│   │   ├── components/    # VoiceToggle, ShoppingList, Login, Signup, SmartSuggestions
-│   │   ├── context/       # AuthContext provider
-│   │   └── services/      # Axios API service
-│   ├── .env.example       # Frontend environment variables template
-│   └── package.json       # Frontend Node dependencies
+│   │   ├── components/
+│   │   ├── context/
+│   │   └── services/
+│   ├── .env.example
+│   └── package.json
+│
 ├── scripts/
-│   └── import_products.py # Supermarket catalogue import & Qdrant embedding script
-├── .gitignore             # Git exclusion rules
-├── .env.example           # Root environment variable template
-├── requirements.txt       # Root Python dependencies for cloud deployment
+│   └── import_products.py
+│
+├── .gitignore
+├── .env.example
+├── requirements.txt
 └── README.md
-```
+🔐 Security & Data Isolation
 
+ShopVA follows a security-focused architecture.
 
-## 🚀 Local Development Setup
+No Hardcoded Secrets
 
-### 1. Prerequisites
-- Python 3.11+
-- Node.js 18+ & npm
-- Conda or virtualenv (recommended)
+API keys, database credentials, JWT secrets, and other sensitive configuration are supplied through environment variables.
 
-### 2. Backend Setup
-```bash
-# Clone the repository
-git clone https://github.com/your-username/voice-shopping-assistant.git
-cd voice-shopping-assistant
+Sensitive credentials are not committed to the public repository.
 
-# Create & activate virtual environment
-python -m venv venv
-# On Windows:
-venv\Scripts\activate
-# On Linux/macOS:
-source venv/bin/activate
+Server-Derived Identity
 
-# Install backend dependencies
-pip install -r requirements.txt
+Customer identity is derived from the validated JWT token.
 
-# Seed product catalogue database & generate MiniLM vectors
-python scripts/import_products.py
+The backend does not trust a customer ID supplied directly by the frontend.
 
-# Start FastAPI backend server
-uvicorn backend.app.main:app --reload --port 8000
-```
-Interactive API documentation is available at `http://localhost:8000/api/docs`.
+IDOR Protection
 
-### 3. Frontend Setup
-```bash
-cd frontend
+Shopping lists, shopping items, and purchase history are restricted to the authenticated customer.
 
-# Install Node dependencies
-npm install
+Catalogue Validation
 
-# Start Vite development server
-npm run dev
-```
-Open `http://localhost:5173` in Google Chrome or Microsoft Edge for Web Speech API support.
+Products must be validated against the supermarket catalogue before they can be added.
 
-### 4. Run Automated Tests
-```bash
-python -m pytest backend/tests/ -v
-```
+The LLM cannot directly create arbitrary catalogue products.
 
----
+Semantic Search Validation
 
-## ☁️ Free Cloud Deployment Guide
+Qdrant results are treated as candidate results.
 
-### 1. Backend Deployment on Render
-1. Create a free account on [Render.com](https://render.com/).
-2. Click **New +** $\rightarrow$ **Web Service** and connect your GitHub repository.
-3. Set the following settings:
-   - **Root Directory**: `.` (or leave empty)
-   - **Runtime**: `Python 3`
-   - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT`
-4. In **Environment Variables**, add:
-   - `GROQ_API_KEY`
-   - `GROQ_MODEL`
-   - `DATABASE_URL` (your Supabase PostgreSQL URL)
-   - `QDRANT_URL`
-   - `QDRANT_API_KEY`
-   - `SECRET_KEY`
-   - `FRONTEND_URL` (your Vercel URL)
-5. Deploy Web Service. Render will expose your backend at `https://your-app.onrender.com`.
+The backend validates the corresponding catalogue product before accepting the item.
 
-### 2. Frontend Deployment on Vercel
-1. Create a free account on [Vercel.com](https://vercel.com/).
-2. Import your GitHub repository into Vercel.
-3. Set the **Framework Preset** to **Vite**.
-4. Set the **Root Directory** to `frontend`.
-5. Under **Environment Variables**, add:
-   - `VITE_API_BASE_URL`: `https://your-app.onrender.com`
-6. Click **Deploy**. Vercel will host your app at `https://your-app.vercel.app`.
+🧠 AI + Deterministic Business Logic
 
-### 3. Database Deployment on Supabase
-1. Create a project at [Supabase.com](https://supabase.com/).
-2. Under **Project Settings** $\rightarrow$ **Database**, copy your PostgreSQL Connection String (`URI`).
-3. Set `DATABASE_URL` in your Render backend environment settings. FastAPI will automatically run migrations and create all tables on startup.
+A key design principle of ShopVA is separating language understanding from business decisions.
 
----
+LLM Responsibilities
 
-## 🔐 Security & Data Isolation
-- **No Hardcoded Secrets**: All API keys, connection strings, and tokens are configured via environment variables.
-- **Server-Derived Identity**: Identity is extracted exclusively from validated Bearer JWT tokens. Frontend-supplied user IDs are ignored.
-- **IDOR Protection**: Shopping lists, items, and purchase histories are restricted to `WHERE user_id = authenticated_user.id`.
+The LLM understands what the customer is asking.
 
----
+For example:
 
-## 📄 License & Notes
-Designed for production-grade demonstration of clean separation between LLM intent extraction, deterministic size engines, vector similarity search, and real-time Web Speech UI.
+"Can you put two bottles of shampoo on my list?"
+
+        ↓
+
+Intent: ADD_ITEM
+Product: Shampoo
+Quantity: 2
+Unit: Bottle
+Backend Responsibilities
+
+The backend determines:
+
+Whether the product exists.
+Whether the product is available.
+Which category it belongs to.
+Which sizes are available.
+Whether the requested size is valid.
+Whether previous purchase history should influence size selection.
+Whether the item can be added.
+Which recommendations should be generated.
+
+This prevents the LLM from inventing:
+
+Products
+Sizes
+Categories
+Catalogue availability
+📊 End-to-End Shopping Workflow
+Customer Voice Command
+          │
+          ▼
+Speech Recognition
+          │
+          ▼
+LLM Intent & Entity Extraction
+          │
+          ▼
+Product Resolution
+          │
+          ▼
+Semantic Catalogue Search
+          │
+          ▼
+Catalogue Validation
+          │
+          ▼
+Quantity & Size Processing
+          │
+          ▼
+Purchase History Analysis
+          │
+          ▼
+Shopping List Update
+          │
+          ▼
+Smart Suggestions
+          │
+          ▼
+Voice Confirmation
+🧪 Reliability & Error Handling
+
+The application is designed to handle common AI, voice, database, and catalogue failures.
+
+Examples include:
+
+Unknown products
+Products not present in the catalogue
+Unsupported product sizes
+Missing quantities
+Invalid commands
+LLM API failures
+Voice recognition failures
+Authentication failures
+Database connection failures
+Semantic search failures
+Invalid catalogue matches
+
+The backend validates AI output before performing shopping-list operations.
+
+🛡️ Example Catalogue Validation
+
+Consider the command:
+
+"Add medicine"
+
+The LLM may correctly understand:
+
+Intent: ADD_ITEM
+Product: Medicine
+
+However, the backend then checks:
+
+Does "Medicine" exist in the supermarket catalogue?
+If YES
+Catalogue Product Found
+        ↓
+Validate Size
+        ↓
+Validate Quantity
+        ↓
+Add to Shopping List
+If NO
+Catalogue Product Not Found
+        ↓
+Reject Request
+        ↓
+Do NOT create ShoppingListItem
+        ↓
+Inform Customer
+
+This ensures that an arbitrary product name cannot be inserted into the shopping list simply because the LLM recognized it.
+
+📏 Example Size Handling
+User specifies size
+"Add 500g honey"
+
+Expected interpretation:
+
+Product  = Honey
+Quantity = 1
+Size     = 500g
+
+The system checks whether the requested size exists in the catalogue.
+
+User does not specify size
+"Add honey"
+
+The system:
+
+Honey
+  ↓
+Check catalogue sizes
+  ↓
+Check recent purchase history
+  ↓
+Previous suitable size?
+  ├── YES → Use it
+  │
+  └── NO → Ask customer to select size
+
+The assistant never speaks internal placeholders such as:
+
+_
+____
+______
+
+Missing values are represented semantically and the customer is given a proper size-selection option.
+
+🤖 Example Smart Suggestion
+
+Suppose the customer's completed lists are:
+
+Shopping List 1:
+Bread
+Jam
+Milk
+
+Shopping List 2:
+Bread
+Jam
+Butter
+
+Shopping List 3:
+Bread
+Jam
+Eggs
+
+The system detects:
+
+Bread + Jam
+
+as a repeated co-purchase relationship.
+
+When the customer adds:
+
+Bread
+
+the assistant can suggest:
+
+You frequently buy Jam with Bread.
+Would you like to add Jam?
+
+The recommendation is based on the customer's own purchase history.
+
+🎯 Project Highlights
+🎙️ Voice-first shopping interaction
+🧠 LLM-based natural language understanding
+🔎 Semantic product retrieval
+🛍️ Catalogue-grounded product validation
+📦 Deterministic size decision engine
+🤖 Personalized co-purchase recommendations
+👤 Secure customer-specific shopping lists
+🔐 JWT authentication
+🛡️ IDOR protection
+🗂️ Category-based shopping list organization
+🎧 Continuous voice interaction
+🔊 Independent assistant voice control
+☁️ Cloud-hosted architecture
+🧪 Automated backend testing
+🔒 Environment-based secret management
+🌐 Deployment
+
+The production frontend is hosted at:
+
+https://shop-va-shopping-voice-assistant.vercel.app/
+
+The application uses cloud-hosted backend, database, vector-search, and AI services.
+
+Sensitive service credentials are managed through deployment environment variables rather than being stored in the repository.
+
+🎯 Design Philosophy
+
+ShopVA combines modern AI capabilities with deterministic software engineering.
+
+The application does not rely entirely on an LLM for business decisions.
+
+Instead:
+
+LLM
+  ↓
+Understand the customer's language
+
+Catalogue
+  ↓
+Confirm that the product exists
+
+Backend
+  ↓
+Validate the request
+
+Business Logic
+  ↓
+Determine quantity, size and recommendations
+
+Database
+  ↓
+Persist customer-specific data
+
+This architecture improves reliability, reduces hallucinated catalogue products, and keeps customer data isolated.
+
+📄 License
+
+This project was developed as a software engineering technical assessment and demonstration of an AI-powered voice shopping application.
